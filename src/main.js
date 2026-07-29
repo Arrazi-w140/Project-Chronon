@@ -514,13 +514,23 @@ function flashStatus(text) {
 
 // ---------- push to desktop ----------
 
+// Hard ceiling on how long we'll wait for the backend before giving up and
+// resetting the UI ourselves. `push_widget` should always resolve or reject
+// well before this fires — it exists purely as a last-resort safety net so
+// a future regression (or a genuinely wedged backend) can never again leave
+// the button stuck in "Pushing…" forever with no way out for the user.
+const PUSH_TIMEOUT_MS = 10000;
+
 function setupPush() {
   const btn = document.getElementById("pushBtn");
   const label = btn.querySelector(".btn-label");
   const originalLabel = label.textContent;
 
   btn.addEventListener("click", async () => {
+    console.log("[PushToDesktop] Button clicked");
+
     if (!tauriInvoke) {
+      console.error("[PushToDesktop] No Tauri bridge available (running outside the app?)");
       flashStatus("Desktop widgets require the Chronon app");
       return;
     }
@@ -528,19 +538,61 @@ function setupPush() {
     btn.disabled = true;
     label.textContent = "Pushing…";
 
+    console.log("[PushToDesktop] Validating configuration...");
+    let config;
     try {
-      await tauriInvoke("push_widget", { config: readAllSettings() });
+      config = readAllSettings();
+    } catch (err) {
+      console.error("[PushToDesktop] Failed to read widget configuration", err);
+      flashStatus("Failed to load widget configuration.");
+      label.textContent = originalLabel;
+      btn.disabled = false;
+      return;
+    }
+
+    console.log("[PushToDesktop] Sending invoke() command...");
+
+    let timedOut = false;
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => {
+        timedOut = true;
+        reject(new Error("Timed out waiting for the backend to respond."));
+      }, PUSH_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([tauriInvoke("push_widget", { config }), timeout]);
+      console.log("[PushToDesktop] Desktop widget is now active");
       widgetActive = true;
       updateWidgetControlsUI();
-      flashStatus("Pushed to desktop");
+      flashStatus("Widget successfully pushed to the desktop.");
     } catch (err) {
-      console.error("Failed to push widget to desktop", err);
-      flashStatus("Couldn't push to desktop");
+      const message = timedOut
+        ? "Couldn't push to desktop: the backend didn't respond in time."
+        : `Couldn't push to desktop: ${errorMessage(err)}`;
+      console.error("[PushToDesktop] Failed at push step:", err);
+      flashStatus(message);
     } finally {
+      // Always runs, on every path above (success, backend error, thrown
+      // error, or timeout) — the button can never remain stuck disabled
+      // or showing "Pushing…".
       label.textContent = originalLabel;
       btn.disabled = false;
     }
   });
+}
+
+// Tauri command errors can arrive as a plain string, an Error, or an
+// object with a message field depending on how the Rust side rejected.
+// Normalize all of those into a readable string for the status message.
+function errorMessage(err) {
+  if (typeof err === "string") return err;
+  if (err && typeof err.message === "string") return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "Unexpected error.";
+  }
 }
 
 // ---------- delete from desktop ----------

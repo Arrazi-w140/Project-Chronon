@@ -52,14 +52,56 @@ fn store_config(state: &State<WidgetState>, config: Value) {
 /// Create the widget window if it doesn't exist yet, or push fresh config
 /// to it if it's already up (so clicking "Push to Desktop" again behaves
 /// like an immediate update rather than an error).
+///
+/// IMPORTANT: this must be an `async fn`. `WebviewWindowBuilder::build()`
+/// (like most window/webview-creation APIs) is only safe to call on the
+/// main thread. Tauri dispatches *synchronous* commands onto a background
+/// thread pool, so calling `.build()` from a `fn` (non-async) command
+/// deadlocks: the main thread ends up waiting on a lock that only itself
+/// could release, the `invoke()` promise on the JS side never resolves or
+/// rejects, and the UI is stuck in "Pushing…" forever with no error. This
+/// was the root cause of the original bug. Marking the command `async`
+/// lets Tauri's runtime correctly hop the window-creation call onto the
+/// main thread and await the result without blocking it.
+/// See: https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html
 #[tauri::command]
-pub fn push_widget(app: AppHandle, state: State<WidgetState>, config: Value) -> Result<(), String> {
+pub async fn push_widget(app: AppHandle, state: State<'_, WidgetState>, config: Value) -> Result<(), String> {
+    println!("[PushToDesktop] Rust: push_widget invoked");
+
+    println!("[PushToDesktop] Rust: validating configuration");
+    if !config.is_object() && !config.is_null() {
+        let msg = "Failed to load widget configuration.".to_string();
+        eprintln!("[PushToDesktop] Rust: {msg}");
+        return Err(msg);
+    }
+
     store_config(&state, config.clone());
 
     if let Some(existing) = app.get_webview_window(WIDGET_LABEL) {
-        return existing.emit(CONFIG_EVENT, config).map_err(|e| e.to_string());
+        println!("[PushToDesktop] Rust: widget already running, bringing to front and updating");
+
+        // Bring the existing widget to the front instead of creating a
+        // duplicate window. Failures here are non-fatal to the overall
+        // push (the config update below is the part the user actually
+        // cares about), so they're logged but don't abort the command.
+        if let Err(e) = existing.unminimize() {
+            eprintln!("[PushToDesktop] Rust: failed to unminimize existing widget: {e}");
+        }
+        if let Err(e) = existing.show() {
+            eprintln!("[PushToDesktop] Rust: failed to show existing widget: {e}");
+        }
+        if let Err(e) = existing.set_focus() {
+            eprintln!("[PushToDesktop] Rust: failed to focus existing widget: {e}");
+        }
+
+        return existing.emit(CONFIG_EVENT, config).map_err(|e| {
+            let msg = format!("Failed to communicate with the backend: {e}");
+            eprintln!("[PushToDesktop] Rust: {msg}");
+            msg
+        });
     }
 
+    println!("[PushToDesktop] Rust: creating widget window");
     let widget_window = WebviewWindowBuilder::new(&app, WIDGET_LABEL, WebviewUrl::App("widget.html".into()))
         .title("Chronon Widget")
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
@@ -75,7 +117,12 @@ pub fn push_widget(app: AppHandle, state: State<WidgetState>, config: Value) -> 
         .focused(false)       // never steals keyboard focus on creation
         .visible(true)
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = format!("Failed to create widget window: {e}");
+            eprintln!("[PushToDesktop] Rust: {msg}");
+            msg
+        })?;
+    println!("[PushToDesktop] Rust: widget window created successfully");
 
     // Defensive: if the widget window is ever destroyed by something other
     // than the Delete button (a future close affordance, etc.), let the
@@ -83,12 +130,14 @@ pub fn push_widget(app: AppHandle, state: State<WidgetState>, config: Value) -> 
     let app_for_event = app.clone();
     widget_window.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
+            println!("[PushToDesktop] Rust: widget window destroyed, notifying editor");
             if let Some(main) = app_for_event.get_webview_window(MAIN_LABEL) {
                 let _ = main.emit(CLOSED_EVENT, ());
             }
         }
     });
 
+    println!("[PushToDesktop] Rust: desktop widget is now active");
     Ok(())
 }
 
@@ -116,12 +165,22 @@ pub fn get_widget_config(state: State<WidgetState>) -> Result<Value, String> {
 }
 
 /// Close the widget window and free its resources.
+///
+/// Made `async` for the same reason as `push_widget`: window-lifecycle
+/// operations should not run on the background thread pool that handles
+/// synchronous commands, since some platforms require the main thread.
 #[tauri::command]
-pub fn delete_widget(app: AppHandle, state: State<WidgetState>) -> Result<(), String> {
+pub async fn delete_widget(app: AppHandle, state: State<'_, WidgetState>) -> Result<(), String> {
+    println!("[PushToDesktop] Rust: delete_widget invoked");
     if let Some(window) = app.get_webview_window(WIDGET_LABEL) {
-        window.close().map_err(|e| e.to_string())?;
+        window.close().map_err(|e| {
+            let msg = format!("Failed to close widget window: {e}");
+            eprintln!("[PushToDesktop] Rust: {msg}");
+            msg
+        })?;
     }
     store_config(&state, Value::Null);
+    println!("[PushToDesktop] Rust: widget deleted");
     Ok(())
 }
 
