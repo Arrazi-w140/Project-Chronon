@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chronon Widget</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* This page renders inside a borderless, transparent Tauri window (see
+       src-tauri/src/widget_window.rs), so it overrides the editor's opaque
+       html/body background from styles.css instead of touching that shared
+       file. .widget-mock itself (background/padding/radius) is still driven
+       live by renderWidgetChrome() in widget-renderer.js. */
+    html, body {
+      background: transparent;
+      overflow: hidden;
+    }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-user-select: none;
+      user-select: none;
+      cursor: grab;
+    }
+    body:active {
+      cursor: grabbing;
+    }
+    #widgetRoot {
+      width: 100%;
+    }
+  </style>
+</head>
+<!-- data-tauri-drag-region makes the whole window draggable by clicking and
+     dragging anywhere on it, with no JS needed. -->
+<body data-tauri-drag-region>
+  <div class="widget-mock" id="widgetRoot" data-tauri-drag-region></div>
+
+  <script src="time-formats.js"></script>
+  <script src="widget-renderer.js"></script>
+  <script src="widget.js"></script>
+</body>
+</html>
