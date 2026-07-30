@@ -113,7 +113,6 @@ function createRowCardEl(cfg) {
       <span class="tick"></span>
       <span class="row-color-dot"></span>
       <span class="row-title-text">Row ${cfg.row}</span>
-      <span class="chev" aria-hidden="true">⌄</span>
     </button>
     <div class="accordion">
       <div class="accordion-inner" aria-hidden="true">

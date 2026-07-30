@@ -164,8 +164,8 @@ html, body {
 /* ---------- MIDDLE: configuration column ---------- */
 
 .config-pane {
-  flex: 2 1 0;
-  min-width: 360px;
+  flex: 3 1 0;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -235,23 +235,6 @@ html, body {
   text-transform: uppercase;
   color: var(--text-primary);
   line-height: 1;
-}
-
-.settings-header {
-  padding: 18px 28px 8px;
-  flex-shrink: 0;
-}
-
-.settings-header h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.settings-header p {
-  margin: 4px 0 0;
-  color: var(--text-muted);
-  font-size: 13px;
 }
 
 .page-panel .card {
@@ -348,17 +331,6 @@ html, body {
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.25);
   flex-shrink: 0;
-}
-
-.row-toggle .chev {
-  margin-left: auto;
-  color: var(--text-muted);
-  transition: transform 0.25s ease;
-  font-family: var(--sans);
-}
-
-.card.collapsed .row-toggle .chev {
-  transform: rotate(-90deg);
 }
 
 /* Smooth expand/collapse via animatable grid track, no JS height math needed. */
@@ -712,20 +684,21 @@ input[type="color"]:hover {
   font-family: var(--mono);
 }
 
-/* ---------- footer ---------- */
+/* ---------- action buttons (live in the preview pane) ---------- */
 
-.settings-footer {
+.preview-footer {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
-  padding: 16px 28px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-panel);
+  padding-top: 22px;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  gap: 10px;
 }
 
 .save-status {
+  min-height: 14px;
   font-size: 12px;
   color: var(--text-muted);
   font-family: var(--mono);
@@ -734,6 +707,7 @@ input[type="color"]:hover {
 .footer-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 
@@ -795,7 +769,7 @@ input[type="color"]:hover {
 
 .preview-pane {
   position: relative;
-  flex: 3 1 0;
+  flex: 5 1 0;
   min-width: 360px;
   background: radial-gradient(circle at 30% 20%, #272c39 0%, #1d2029 55%, var(--bg-panel) 100%);
   background-size: 160% 160%;
@@ -804,9 +778,21 @@ input[type="color"]:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 56px;
+  padding: 56px 56px 32px;
   overflow: hidden;
+}
+
+/* Widget preview centers in whatever vertical space is left once the
+   action buttons (moved here from the config pane) claim their room
+   at the bottom. */
+.preview-body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .preview-pane::before {

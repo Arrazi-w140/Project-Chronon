@@ -72,18 +72,12 @@
             <span class="brand-mark">Chronon</span>
           </div>
 
-          <header class="settings-header">
-            <h1>Widget Time</h1>
-            <p>Configure your desktop clock widget.</p>
-          </header>
-
           <!-- General behaves exactly like the Row accordions below: collapsed
                by default, toggled via the same .row-toggle button pattern. -->
           <section class="card general-card collapsed" data-row="general">
             <button class="card-title row-toggle" type="button" aria-expanded="false">
               <span class="tick"></span>
               <span>General</span>
-              <span class="chev" aria-hidden="true">⌄</span>
             </button>
 
             <div class="accordion">
@@ -184,34 +178,28 @@
         </div>
 
       </div>
-
-      <footer class="settings-footer">
-        <span class="save-status" id="saveStatus" role="status" aria-live="polite"></span>
-        <div class="footer-actions">
-          <button id="saveBtn" class="btn btn-secondary">Save</button>
-          <button id="pushBtn" class="btn btn-primary">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M8 10.5V2.5M8 2.5L5 5.5M8 2.5l3 3" />
-              <path d="M2.5 9.5v3A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-3" />
-            </svg>
-            <span class="btn-label">Push to Desktop</span>
-          </button>
-          <button id="deleteBtn" class="btn btn-danger" disabled title="No widget is currently on the desktop">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M2.5 4.5h11" />
-              <path d="M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5" />
-              <path d="M4 4.5 4.6 13a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.5" />
-              <path d="M6.7 7.3v4M9.3 7.3v4" />
-            </svg>
-            <span class="btn-label">Delete from Desktop</span>
-          </button>
-        </div>
-      </footer>
     </main>
 
     <!-- RIGHT: live preview -->
     <aside class="preview-pane">
-      <div class="widget-mock" id="widgetMock"></div>
+      <div class="preview-body">
+        <div class="widget-mock" id="widgetMock"></div>
+      </div>
+
+      <!-- Action buttons live here (under the preview) rather than under the
+           config list, so they read as acting on "the widget" as a whole. -->
+      <footer class="preview-footer">
+        <span class="save-status" id="saveStatus" role="status" aria-live="polite"></span>
+        <div class="footer-actions">
+          <button id="saveBtn" class="btn btn-secondary">Save</button>
+          <button id="pushBtn" class="btn btn-primary">
+            <span class="btn-label">Push to Desktop</span>
+          </button>
+          <button id="deleteBtn" class="btn btn-danger" disabled title="No widget is currently on the desktop">
+            <span class="btn-label">Delete from Desktop</span>
+          </button>
+        </div>
+      </footer>
     </aside>
   </div>
 
