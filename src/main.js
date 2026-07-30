@@ -210,7 +210,9 @@ function readAllSettings() {
   const widgetBg = document.getElementById("widgetBg").value;
   const widgetBgOpacity = document.getElementById("widgetBgOpacity").value;
   const rowOrder = getRowOrder();
-  return { brandName, widgetBg, widgetBgOpacity, rows, rowOrder };
+  const posX = Number(document.getElementById("posX").value) || 0;
+  const posY = Number(document.getElementById("posY").value) || 0;
+  return { brandName, widgetBg, widgetBgOpacity, rows, rowOrder, posX, posY };
 }
 
 // ---------- live preview ----------
@@ -372,6 +374,28 @@ function setupGeneralLiveInputs() {
   });
 }
 
+// ---------- General section: Position ----------
+//
+// Unlike the rest of General, X/Y don't affect the editor's own preview
+// (widgetMock is just a DOM element on this page, not something the OS
+// positions) — they only matter to a real desktop widget window, if one is
+// currently active. So this intentionally calls syncWidgetIfActive()'s
+// position-only counterpart instead of handleSettingsChanged().
+function setupPositionLiveInputs() {
+  ["posX", "posY"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", handlePositionChanged);
+  });
+}
+
+function handlePositionChanged() {
+  if (!widgetActive || !tauriInvoke) return;
+  const x = Number(document.getElementById("posX").value) || 0;
+  const y = Number(document.getElementById("posY").value) || 0;
+  tauriInvoke("set_widget_position", { x, y }).catch((err) => {
+    console.error("[PushToDesktop] Failed to move desktop widget:", err);
+  });
+}
+
 function setupOpacityReadout() {
   const slider = document.getElementById("widgetBgOpacity");
   const readout = document.getElementById("widgetBgOpacityValue");
@@ -450,10 +474,12 @@ function setupSave() {
 // ---------- desktop widget: Tauri bridge ----------
 //
 // The editor talks to the real desktop widget (a separate, borderless
-// Tauri window — see src-tauri/src/widget_window.rs) through five commands:
-//   push_widget(config)          create the widget, or update it if it's
-//                                 already up
-//   update_widget_config(config) live-sync while the widget is active
+// Tauri window — see src-tauri/src/widget_window.rs) through six commands:
+//   push_widget(config, x, y)    create the widget, or update it (config
+//                                 AND position) if it's already up
+//   update_widget_config(config) live-sync config while the widget is active
+//   set_widget_position(x, y)    live-sync position while the widget is
+//                                 active (Settings' Position fields)
 //   delete_widget()              close the widget and free its resources
 //   get_widget_config()          widget.html pulls this on load
 //   is_widget_active()           used to restore the Delete button's state
@@ -560,7 +586,10 @@ function setupPush() {
     });
 
     try {
-      await Promise.race([tauriInvoke("push_widget", { config }), timeout]);
+      await Promise.race([
+        tauriInvoke("push_widget", { config, x: config.posX, y: config.posY }),
+        timeout,
+      ]);
       console.log("[PushToDesktop] Desktop widget is now active");
       widgetActive = true;
       updateWidgetControlsUI();
@@ -654,6 +683,8 @@ function restoreSettings() {
     document.getElementById("widgetBg").value = settings.widgetBg || "#000000";
     document.getElementById("widgetBgOpacity").value = settings.widgetBgOpacity || 0;
     document.getElementById("widgetBgOpacityValue").textContent = `${settings.widgetBgOpacity || 0}%`;
+    document.getElementById("posX").value = settings.posX || 0;
+    document.getElementById("posY").value = settings.posY || 0;
 
     (settings.rows || []).forEach((r) => {
       const card = document.querySelector(`.row-card[data-row="${r.row}"]`);
@@ -775,6 +806,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupAccordionToggles();
   setupRowsDelegation();
   setupGeneralLiveInputs();
+  setupPositionLiveInputs();
   setupOpacityReadout();
   setupOrderDragDrop();
   setupColorSwatches();

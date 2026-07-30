@@ -23,3 +23,10 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Only pulled in on Windows: used by desktop_layer.rs to reparent the
+# widget into the WorkerW layer behind the desktop icons. The same
+# `windows` crate version tauri/wry already depend on internally, so this
+# doesn't add a second copy to the dependency graph.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+

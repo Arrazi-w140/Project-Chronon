@@ -22,20 +22,22 @@
       justify-content: center;
       -webkit-user-select: none;
       user-select: none;
-      cursor: grab;
-    }
-    body:active {
-      cursor: grabbing;
+      /* Not draggable, not clickable-into-anything: this is a display-only
+         desktop widget. Position is controlled from the editor's Settings
+         page (see src-tauri/src/widget_window.rs's set_widget_position),
+         not by dragging the widget itself. */
+      cursor: default;
     }
     #widgetRoot {
       width: 100%;
     }
   </style>
 </head>
-<!-- data-tauri-drag-region makes the whole window draggable by clicking and
-     dragging anywhere on it, with no JS needed. -->
-<body data-tauri-drag-region>
-  <div class="widget-mock" id="widgetRoot" data-tauri-drag-region></div>
+<!-- No data-tauri-drag-region here on purpose: this widget is positioned
+     from Settings, not by dragging, and a click on it should do nothing
+     but display the clock. -->
+<body>
+  <div class="widget-mock" id="widgetRoot"></div>
 
   <script src="time-formats.js"></script>
   <script src="widget-renderer.js"></script>

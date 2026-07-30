@@ -13,8 +13,15 @@
 // stable even as the settings schema grows on the JS side; adding a new
 // row field, a new General setting, etc. needs zero Rust changes.
 //
+// Position is the one exception to the "opaque blob" rule above: it's
+// inherently a native window property (an OS-level coordinate), not
+// something widget-renderer.js can apply to the DOM, so it travels as its
+// own explicitly-typed `x`/`y` pair instead of living inside `config`.
+//
 // Flow:
-//   editor --invoke--> push_widget / update_widget_config / delete_widget
+//   editor --invoke--> push_widget(config, x, y) / update_widget_config
+//   editor --invoke--> set_widget_position(x, y)      (live, while active)
+//   editor --invoke--> delete_widget
 //   widget --invoke--> get_widget_config              (pull, on load)
 //   widget <--emit---- "widget-config-update"          (push, while live)
 //   editor <--emit---- "widget-closed"                 (if torn down
@@ -22,21 +29,27 @@
 
 use serde_json::Value;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindowBuilder,
+    WindowEvent,
+};
+#[cfg(target_os = "windows")]
+use crate::desktop_layer;
 
 pub const WIDGET_LABEL: &str = "widget";
 const MAIN_LABEL: &str = "main";
 const CONFIG_EVENT: &str = "widget-config-update";
 const CLOSED_EVENT: &str = "widget-closed";
 
-/// Default widget window geometry for its first appearance. Feel free to
-/// make this smarter later (remember last position/size per user, cascade
-/// from monitor bounds, etc.) — this module only needs `push_widget` to
-/// keep working, not this specific placement.
+/// Default widget window *size* for its first appearance. Feel free to make
+/// this smarter later (remember last size per user, cascade from monitor
+/// bounds, etc.) — this module only needs `push_widget` to keep working,
+/// not this specific size. Initial *position* is no longer defaulted here;
+/// it always comes from whatever the editor's Position fields say (see
+/// `push_widget`'s `x`/`y` params below), which in turn default to (0, 0)
+/// on the JS side.
 const DEFAULT_WIDTH: f64 = 320.0;
 const DEFAULT_HEIGHT: f64 = 200.0;
-const DEFAULT_X: f64 = 60.0;
-const DEFAULT_Y: f64 = 60.0;
 
 #[derive(Default)]
 pub struct WidgetState {
@@ -65,7 +78,13 @@ fn store_config(state: &State<WidgetState>, config: Value) {
 /// main thread and await the result without blocking it.
 /// See: https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html
 #[tauri::command]
-pub async fn push_widget(app: AppHandle, state: State<'_, WidgetState>, config: Value) -> Result<(), String> {
+pub async fn push_widget(
+    app: AppHandle,
+    state: State<'_, WidgetState>,
+    config: Value,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
     println!("[PushToDesktop] Rust: push_widget invoked");
 
     println!("[PushToDesktop] Rust: validating configuration");
@@ -90,8 +109,10 @@ pub async fn push_widget(app: AppHandle, state: State<'_, WidgetState>, config: 
         if let Err(e) = existing.show() {
             eprintln!("[PushToDesktop] Rust: failed to show existing widget: {e}");
         }
-        if let Err(e) = existing.set_focus() {
-            eprintln!("[PushToDesktop] Rust: failed to focus existing widget: {e}");
+        // Deliberately NOT calling set_focus() here: a desktop widget
+        // should never steal keyboard focus, including on a re-push.
+        if let Err(e) = existing.set_position(LogicalPosition::new(x, y)) {
+            eprintln!("[PushToDesktop] Rust: failed to reposition existing widget: {e}");
         }
 
         return existing.emit(CONFIG_EVENT, config).map_err(|e| {
@@ -105,16 +126,20 @@ pub async fn push_widget(app: AppHandle, state: State<'_, WidgetState>, config: 
     let widget_window = WebviewWindowBuilder::new(&app, WIDGET_LABEL, WebviewUrl::App("widget.html".into()))
         .title("Chronon Widget")
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        .position(DEFAULT_X, DEFAULT_Y)
-        .decorations(false)   // borderless / frameless
-        .transparent(true)    // only the widget content is visible
-        .shadow(false)        // no OS drop-shadow around the transparent area
-        .always_on_top(true)  // practical stand-in for "sits above everything else";
-                               // see the note at the bottom of this file about true
-                               // desktop-level (behind other app windows) placement
-        .skip_taskbar(true)   // never appears in the taskbar
-        .resizable(true)      // resizable now, per the spec's "design for it" note
-        .focused(false)       // never steals keyboard focus on creation
+        .position(x, y)
+        .decorations(false)     // borderless / frameless
+        .transparent(true)      // only the widget content is visible
+        .shadow(false)          // no OS drop-shadow around the transparent area
+        .always_on_bottom(true) // cross-platform baseline: never covers a normal app
+                                 // window. On Windows this is superseded a few lines
+                                 // down by the real desktop-layer placement (see
+                                 // desktop_layer.rs); on macOS/Linux it's the
+                                 // approximation Tauri exposes for "sits behind
+                                 // everything else" (see the note at the bottom of
+                                 // this file).
+        .skip_taskbar(true)     // never appears in the taskbar
+        .resizable(true)        // resizable now, per the spec's "design for it" note
+        .focused(false)         // never steals keyboard focus on creation
         .visible(true)
         .build()
         .map_err(|e| {
@@ -123,6 +148,13 @@ pub async fn push_widget(app: AppHandle, state: State<'_, WidgetState>, config: 
             msg
         })?;
     println!("[PushToDesktop] Rust: widget window created successfully");
+
+    // Windows only: reparent into the desktop's WorkerW layer so the widget
+    // sits *behind* the desktop icons instead of merely behind other app
+    // windows. See desktop_layer.rs for the full explanation and its
+    // (soft) failure modes.
+    #[cfg(target_os = "windows")]
+    desktop_layer::attach(&widget_window);
 
     // Defensive: if the widget window is ever destroyed by something other
     // than the Delete button (a future close affordance, etc.), let the
@@ -139,6 +171,26 @@ pub async fn push_widget(app: AppHandle, state: State<'_, WidgetState>, config: 
 
     println!("[PushToDesktop] Rust: desktop widget is now active");
     Ok(())
+}
+
+/// Live-sync for the Position fields: called whenever the editor's X/Y
+/// inputs change while a widget is already on the desktop. Mirrors
+/// `update_widget_config`'s "no widget, no-op-with-an-error" shape rather
+/// than silently swallowing a state mismatch.
+///
+/// This is deliberately its own command instead of riding along inside
+/// `config` in `update_widget_config`: position is a native window
+/// property that this module has to act on directly (there's no DOM for
+/// it to land in on the widget side), whereas everything in `config` stays
+/// opaque JSON this module never looks at. See the module doc comment.
+#[tauri::command]
+pub fn set_widget_position(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window(WIDGET_LABEL)
+        .ok_or_else(|| "No widget is currently on the desktop.".to_string())?;
+    window
+        .set_position(LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
 }
 
 /// Live-sync: called whenever the editor's settings change while a widget
@@ -206,20 +258,21 @@ pub fn is_widget_active(app: AppHandle) -> bool {
 // an unused command would just be dead code today.
 
 // ---------------------------------------------------------------------
-// NOTE on "always stay above the desktop wallpaper"
+// NOTE on "sits above the wallpaper, below the icons, below every app"
 // ---------------------------------------------------------------------
-// `always_on_top(true)` (used above) is the standard, cross-platform way
-// Tauri lets a window stay above *other normal windows* — it's how most
-// Tauri/Electron desktop-widget apps behave, and satisfies "acts like a
-// native widget, not just another window" in practice.
+// The widget is never `always_on_top`. On Windows, `desktop_layer::attach`
+// (called right after window creation, above) reparents it into the same
+// "WorkerW" layer Rainmeter/Wallpaper Engine use, which genuinely produces
+// the requested stacking: wallpaper < widget < desktop icons < every
+// normal app window. See desktop_layer.rs for the mechanics and its known
+// fragility (undocumented Explorer behavior; an Explorer restart can
+// strand the widget until the app is relaunched).
 //
-// True desktop-level placement — sitting *behind* other application
-// windows but *above* the wallpaper, the way Rainmeter skins do on
-// Windows — isn't something Tauri exposes directly. It requires
-// OS-specific work (on Windows, reparenting the window into the
-// `WorkerW` layer via raw Win32 calls through `raw-window-handle` +
-// the `windows` crate). Flagging that honestly rather than baking in
-// something that only looks right until another window is focused. If
-// you want that later, it's a self-contained addition to this file —
-// `always_on_top(true)` stays as a sane fallback if that reparenting is
-// ever unsupported.
+// On macOS and Linux there's no equivalent public concept of "the WorkerW
+// behind the icons" to reparent into, so those platforms fall back to
+// Tauri's cross-platform `always_on_bottom(true)`: the widget stays below
+// other app windows, but isn't guaranteed to sit behind desktop icons
+// specifically. Genuinely correct per-platform layering there (an NSWindow
+// level on macOS between the desktop and Finder's icon layer; a
+// `_NET_WM_STATE_BELOW`-style approach on Linux, which itself varies by
+// desktop environment) is a reasonable follow-up but out of scope here.
