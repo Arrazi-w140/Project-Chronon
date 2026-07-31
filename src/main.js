@@ -140,15 +140,21 @@ function createRowCardEl(cfg) {
             <select class="row-type">${typeOptionsHtml(cfg.type)}</select>
           </div>
 
+          <div class="row-divider" aria-hidden="true"></div>
+
           <div class="field">
             <label>Size <span class="size-readout">${sizePxToPercent(cfg.size)}%</span></label>
             <input type="range" class="row-size" min="12" max="60" value="${cfg.size}" />
           </div>
 
+          <div class="row-divider" aria-hidden="true"></div>
+
           <div class="field">
             <label>Language</label>
             <select class="row-language">${optionsHtml(LANGUAGE_OPTIONS, cfg.language)}</select>
           </div>
+
+          <div class="row-divider" aria-hidden="true"></div>
 
           <div class="field-row">
             <div class="field">
@@ -161,15 +167,21 @@ function createRowCardEl(cfg) {
             </div>
           </div>
 
+          <div class="row-divider" aria-hidden="true"></div>
+
           <div class="field">
             <label>Color</label>
-            <div class="color-field">
-              <input type="color" class="row-color" value="${cfg.color}" />
-              <span class="hex-readout">${cfg.color.toUpperCase()}</span>
+            <div class="color-row">
+              <div class="color-field">
+                <input type="color" class="row-color" value="${cfg.color}" />
+                <span class="hex-readout">${cfg.color.toUpperCase()}</span>
+              </div>
+              <div class="color-row-divider" aria-hidden="true"></div>
+              <div class="color-swatches" role="group" aria-label="Quick colors">${colorSwatchesHtml(ROW_QUICK_COLORS)}</div>
             </div>
-            <div class="swatches-label">Quick Colors</div>
-            <div class="color-swatches">${colorSwatchesHtml(ROW_QUICK_COLORS)}</div>
           </div>
+
+          <div class="row-divider" aria-hidden="true"></div>
 
           <div class="field">
             <label>Alignment</label>
@@ -179,6 +191,8 @@ function createRowCardEl(cfg) {
               <button type="button" class="align-btn" data-align="right" aria-label="Align right">⇥</button>
             </div>
           </div>
+
+          <div class="row-divider" aria-hidden="true"></div>
 
           <!-- Reserved space for future controls (letter spacing, shadow, opacity, etc.) -->
           <div class="future-settings">

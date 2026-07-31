@@ -11,9 +11,9 @@
     "windows": [
       {
         "title": "widget-time",
-        "width": 900,
+        "width": 1050,
         "height": 650,
-        "minWidth": 900,
+        "minWidth": 1050,
         "minHeight": 650
       }
     ],

@@ -90,12 +90,12 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-top: 14px;
+  padding-top: 2px;
 }
 
 .nav-group-utility {
   margin-top: auto;
-  padding-top: 12px;
+  padding-top: 12 px;
   border-top: 1px solid var(--border);
 }
 
@@ -469,6 +469,36 @@ html, body {
 .field-row {
   display: flex;
   gap: 16px;
+}
+
+/* Subtle section dividers inside row cards — reuses the same low-contrast
+   border color as the rest of the UI (card outlines, header separator)
+   so it reads as "part of the design", not a new visual element. The
+   comfortable spacing above/below comes for free from .card-body's own
+   gap, which already applies between every child, dividers included. */
+.row-divider {
+  height: 1px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Color field: picker+hex, a vertical divider, then quick colors, all on
+   one line. */
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.color-row-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.row-card .color-row .color-swatches {
+  margin-top: 0;
 }
 
 .position-fields .field {
