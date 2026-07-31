@@ -84,21 +84,12 @@
               <div class="accordion-inner" aria-hidden="true">
                 <div class="card-body">
                   <div class="field">
-                    <label for="brandName">Brand name</label>
-                    <input type="text" id="brandName" placeholder="e.g. My Widget" />
+                    <label for="widgetBgSize">Size <span class="size-readout" id="widgetBgSizeValue">14px</span></label>
+                    <input type="range" id="widgetBgSize" min="0" max="40" value="14" />
+                    <p class="field-hint">Controls the size of the background box behind the widget's text.</p>
                   </div>
 
-                  <div class="field">
-                    <label for="widgetBg">Widget background</label>
-                    <div class="color-field">
-                      <input type="color" id="widgetBg" value="#000000" />
-                      <input type="range" id="widgetBgOpacity" min="0" max="100" value="0" />
-                      <span class="opacity-value" id="widgetBgOpacityValue">0%</span>
-                    </div>
-                    <p class="field-hint">0% keeps the widget background fully transparent.</p>
-                    <div class="swatches-label">Quick Colors</div>
-                    <div class="color-swatches" id="widgetBgSwatches"></div>
-                  </div>
+                  <div class="row-divider" aria-hidden="true"></div>
 
                   <div class="field">
                     <label>Position</label>
@@ -114,6 +105,30 @@
                     </div>
                     <p class="field-hint">Coordinates are relative to the top-left corner of your primary monitor. Changing either value moves the widget immediately.</p>
                   </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
+
+                  <div class="field">
+                    <label for="widgetBg">Widget background</label>
+                    <div class="color-row">
+                      <div class="color-field">
+                        <input type="color" id="widgetBg" value="#000000" />
+                        <span class="hex-readout">#000000</span>
+                      </div>
+                      <div class="color-row-divider" aria-hidden="true"></div>
+                      <div class="color-swatches" id="widgetBgSwatches" role="group" aria-label="Quick colors"></div>
+                    </div>
+                  </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
+
+                  <div class="field">
+                    <label for="widgetBgOpacity">Transparency <span class="opacity-value" id="widgetBgOpacityValue">0%</span></label>
+                    <input type="range" id="widgetBgOpacity" min="0" max="100" value="0" />
+                    <p class="field-hint">0% keeps the widget background fully transparent.</p>
+                  </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
 
                   <div class="field">
                     <label>Row order</label>

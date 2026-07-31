@@ -497,7 +497,8 @@ html, body {
   flex-shrink: 0;
 }
 
-.row-card .color-row .color-swatches {
+.row-card .color-row .color-swatches,
+.general-card .color-row .color-swatches {
   margin-top: 0;
 }
 
@@ -606,15 +607,6 @@ input[type="color"]:hover {
   width: 36px;
 }
 
-.swatches-label {
-  margin-top: 10px;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
 .color-swatches {
   display: flex;
   flex-wrap: wrap;
@@ -622,8 +614,10 @@ input[type="color"]:hover {
   margin-top: 8px;
 }
 
-/* Row cards use a short, curated color list — keep it on one line. */
-.row-card .color-swatches {
+/* Row cards (and General, which now mirrors them) use a short, curated
+   color list — keep it on one line. */
+.row-card .color-swatches,
+.general-card .color-swatches {
   flex-wrap: nowrap;
 }
 

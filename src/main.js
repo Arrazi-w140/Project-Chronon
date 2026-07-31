@@ -82,6 +82,12 @@ function colorSwatchesHtml(colors = PRESET_COLORS) {
 const ROW_QUICK_COLORS = ["#FFFFFF", "#0A0B0D", "#D9A441", "#E5484D", "#4FC3F7", "#10B981", "#A855F7"]
   .map((hex) => PRESET_COLORS.find((c) => c.hex === hex));
 
+// Same idea as ROW_QUICK_COLORS, but for the General card's background
+// color field — kept to 6 so it always renders as a single, non-wrapping
+// row just like the Row cards' Quick Colors.
+const GENERAL_QUICK_COLORS = ["#FFFFFF", "#0A0B0D", "#D9A441", "#E5484D", "#4FC3F7", "#A855F7"]
+  .map((hex) => PRESET_COLORS.find((c) => c.hex === hex));
+
 // NOTE: the date/time format registry (FORMAT_REGISTRY, FORMAT_GROUPS,
 // CONTENT_LABELS, computeContent, LANGUAGE_OPTIONS, LANGUAGE_LOCALES, and
 // their helper functions) now lives in time-formats.js, shared with
@@ -238,13 +244,13 @@ function getRowOrder() {
 function readAllSettings() {
   const rowCards = Array.from(document.querySelectorAll("#rowsContainer .row-card"));
   const rows = rowCards.map(readRowCard);
-  const brandName = document.getElementById("brandName").value;
   const widgetBg = document.getElementById("widgetBg").value;
   const widgetBgOpacity = document.getElementById("widgetBgOpacity").value;
+  const widgetBgSize = document.getElementById("widgetBgSize").value;
   const rowOrder = getRowOrder();
   const posX = Number(document.getElementById("posX").value) || 0;
   const posY = Number(document.getElementById("posY").value) || 0;
-  return { brandName, widgetBg, widgetBgOpacity, rows, rowOrder, posX, posY };
+  return { widgetBg, widgetBgOpacity, widgetBgSize, rows, rowOrder, posX, posY };
 }
 
 // ---------- live preview ----------
@@ -323,7 +329,7 @@ function setupAccordionToggles() {
 
 function populateGeneralSwatches() {
   const el = document.getElementById("widgetBgSwatches");
-  if (el) el.innerHTML = colorSwatchesHtml();
+  if (el) el.innerHTML = colorSwatchesHtml(GENERAL_QUICK_COLORS);
 }
 
 // Highlights whichever swatch (if any) matches a color input's current
@@ -398,11 +404,24 @@ function setupRowsDelegation() {
   });
 }
 
-// ---------- General section: brand name + widget background ----------
+// ---------- General section: widget background ----------
 
 function setupGeneralLiveInputs() {
-  ["brandName", "widgetBg"].forEach((id) => {
-    document.getElementById(id).addEventListener("input", handleSettingsChanged);
+  document.getElementById("widgetBg").addEventListener("input", (e) => {
+    const hex = e.target.closest(".color-field").querySelector(".hex-readout");
+    if (hex) hex.textContent = e.target.value.toUpperCase();
+    handleSettingsChanged();
+  });
+}
+
+// ---------- General section: Size (widget background box) ----------
+
+function setupGeneralSizeReadout() {
+  const slider = document.getElementById("widgetBgSize");
+  const readout = document.getElementById("widgetBgSizeValue");
+  slider.addEventListener("input", () => {
+    readout.textContent = `${slider.value}px`;
+    handleSettingsChanged();
   });
 }
 
@@ -698,10 +717,15 @@ function restoreSettings() {
   if (!raw) return;
   try {
     const settings = JSON.parse(raw);
-    document.getElementById("brandName").value = settings.brandName || "";
     document.getElementById("widgetBg").value = settings.widgetBg || "#000000";
+    const generalColorField = document.getElementById("widgetBg").closest(".color-field");
+    const generalHex = generalColorField && generalColorField.querySelector(".hex-readout");
+    if (generalHex) generalHex.textContent = (settings.widgetBg || "#000000").toUpperCase();
     document.getElementById("widgetBgOpacity").value = settings.widgetBgOpacity || 0;
     document.getElementById("widgetBgOpacityValue").textContent = `${settings.widgetBgOpacity || 0}%`;
+    const widgetBgSize = settings.widgetBgSize != null ? settings.widgetBgSize : 14;
+    document.getElementById("widgetBgSize").value = widgetBgSize;
+    document.getElementById("widgetBgSizeValue").textContent = `${widgetBgSize}px`;
     document.getElementById("posX").value = settings.posX || 0;
     document.getElementById("posY").value = settings.posY || 0;
 
@@ -825,6 +849,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupAccordionToggles();
   setupRowsDelegation();
   setupGeneralLiveInputs();
+  setupGeneralSizeReadout();
   setupPositionLiveInputs();
   setupOpacityReadout();
   setupOrderDragDrop();

@@ -35,10 +35,14 @@ function hexToRgba(hex, alpha) {
 }
 
 // Background, padding, and corner radius of the widget "card" itself.
+// widgetBgSize controls only the padding around the rows (i.e. the size of
+// the background box) — it never touches row font sizes. Falls back to the
+// old fixed 14px for settings saved before this control existed.
 function renderWidgetChrome(rootEl, settings) {
   const opacity = Number(settings.widgetBgOpacity) / 100;
+  const boxSize = settings.widgetBgSize != null ? Number(settings.widgetBgSize) : 14;
   rootEl.style.background = hexToRgba(settings.widgetBg, opacity);
-  rootEl.style.padding = opacity > 0 ? "14px" : "0px";
+  rootEl.style.padding = opacity > 0 ? `${boxSize}px` : "0px";
   rootEl.style.borderRadius = opacity > 0 ? "6px" : "0px";
 }
 
