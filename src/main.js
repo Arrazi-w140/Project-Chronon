@@ -18,9 +18,19 @@ const DEFAULT_TEXT_FONT = "'Michroma', system-ui, sans-serif";
 const DEFAULT_NUMBER_FONT = "'JetBrains Mono', 'Courier New', monospace";
 
 const ROW_DEFAULTS = [
-  { row: "1", type: "dayName", size: 48, color: "#FFFFFF", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center" },
-  { row: "2", type: "time24Sec", size: 32, color: "#D9A441", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center" },
-  { row: "3", type: "monthYear", size: 20, color: "#C7CCD1", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center" },
+  { row: "1", type: "dayName", size: 48, color: "#FFFFFF", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none" },
+  { row: "2", type: "time24Sec", size: 32, color: "#D9A441", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none" },
+  { row: "3", type: "monthYear", size: 20, color: "#C7CCD1", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none" },
+];
+
+// Letter-case transform buttons shown under Text Font. "none" (no button
+// active) preserves whatever casing computeContent() naturally produces —
+// the pre-existing behavior — so old saved settings without a textCase
+// field restore exactly as before.
+const TEXT_CASE_OPTIONS = [
+  { value: "upper", label: "ALL CAPS" },
+  { value: "lower", label: "lowercase" },
+  { value: "title", label: "Title Case" },
 ];
 
 const FONT_OPTIONS = [
@@ -57,7 +67,13 @@ function defaultFontFor(select) {
 
 function setFontSelectValue(select, value) {
   select.value = value;
-  if (select.value !== value) select.value = defaultFontFor(select);
+  if (select.value !== value) {
+    console.error(
+      `Font not available for ${select.className.includes("row-text-font") ? "Text Font" : "Number Font"} ` +
+        `(no matching option for "${value}") — falling back to the default font.`
+    );
+    select.value = defaultFontFor(select);
+  }
 }
 
 function refreshRowFontOptions() {
@@ -77,7 +93,15 @@ function fontSource(font) {
 async function registerImportedFont(font) {
   if (importedFontFaces.has(font.id)) return;
   const source = fontSource(font);
-  if (!source || typeof FontFace === "undefined") return;
+  if (!source || typeof FontFace === "undefined") {
+    console.error(
+      `Failed to register imported font ${font.name}: ` +
+        (typeof FontFace === "undefined"
+          ? "the FontFace API is unavailable in this environment."
+          : "no usable font source (missing Tauri asset bridge or font path).")
+    );
+    return;
+  }
 
   try {
     const fontFace = new FontFace(font.family, source);
@@ -258,9 +282,24 @@ const GENERAL_QUICK_COLORS = ["#FFFFFF", "#0A0B0D", "#D9A441", "#E5484D", "#4FC3
 
 // ---------- reusable row card template ----------
 
+// Imported-font option values look like `"ChrononImported-xyz", sans-serif`
+// — they contain literal double quotes so the font-family string stays
+// valid CSS. Those quotes must be HTML-entity-escaped when placed inside
+// the `value="..."` attribute below, or the browser stops parsing the
+// attribute at the first embedded quote and silently truncates the value
+// (e.g. down to ""), which is what made imported fonts fail to apply even
+// though the dropdown looked like it had the right option selected.
+function escapeHtmlAttr(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function optionsHtml(options, selected) {
   return options
-    .map((o) => `<option value="${o.value}"${o.value === selected ? " selected" : ""}>${o.label}</option>`)
+    .map((o) => `<option value="${escapeHtmlAttr(o.value)}"${o.value === selected ? " selected" : ""}>${escapeHtmlAttr(o.label)}</option>`)
     .join("");
 }
 
@@ -328,6 +367,11 @@ function createRowCardEl(cfg) {
             <div class="field">
               <label>Text Font</label>
               <select class="row-text-font">${optionsHtml(allFontOptions(), cfg.textFont)}</select>
+              <div class="case-group" role="group" aria-label="Text case">
+                ${TEXT_CASE_OPTIONS.map(
+                  (c) => `<button type="button" class="case-btn" data-case="${c.value}" aria-label="${c.label}">${c.label}</button>`
+                ).join("")}
+              </div>
             </div>
             <div class="field">
               <label>Number Font</label>
@@ -375,6 +419,9 @@ function createRowCardEl(cfg) {
   const alignBtn = section.querySelector(`.align-btn[data-align="${cfg.align}"]`);
   if (alignBtn) alignBtn.classList.add("active");
 
+  const caseBtn = section.querySelector(`.case-btn[data-case="${cfg.textCase}"]`);
+  if (caseBtn) caseBtn.classList.add("active");
+
   return section;
 }
 
@@ -396,7 +443,9 @@ function readRowCard(cardEl) {
   const language = cardEl.querySelector(".row-language").value;
   const alignBtn = cardEl.querySelector(".align-btn.active");
   const align = alignBtn ? alignBtn.dataset.align : "center";
-  return { row, type, numberFont, textFont, size, color, language, align };
+  const caseBtn = cardEl.querySelector(".case-btn.active");
+  const textCase = caseBtn ? caseBtn.dataset.case : "none";
+  return { row, type, numberFont, textFont, size, color, language, align, textCase };
 }
 
 function readAllSettings() {
@@ -537,6 +586,15 @@ function setupRowsDelegation() {
       const group = alignBtn.closest(".align-group");
       group.querySelectorAll(".align-btn").forEach((b) => b.classList.remove("active"));
       alignBtn.classList.add("active");
+      handleSettingsChanged();
+    }
+
+    const caseBtn = e.target.closest(".case-btn");
+    if (caseBtn) {
+      const group = caseBtn.closest(".case-group");
+      const wasActive = caseBtn.classList.contains("active");
+      group.querySelectorAll(".case-btn").forEach((b) => b.classList.remove("active"));
+      if (!wasActive) caseBtn.classList.add("active");
       handleSettingsChanged();
     }
   });
@@ -889,6 +947,9 @@ function restoreSettings() {
       card.querySelector(".hex-readout").textContent = (r.color || "").toUpperCase();
       card.querySelectorAll(".align-btn").forEach((b) => {
         b.classList.toggle("active", b.dataset.align === r.align);
+      });
+      card.querySelectorAll(".case-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.case === (r.textCase || "none"));
       });
     });
 

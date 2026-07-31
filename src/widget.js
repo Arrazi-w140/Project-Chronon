@@ -37,7 +37,15 @@
   async function registerImportedFont(font) {
     if (importedFontFaces.has(font.family)) return;
     const source = importedFontSource(font);
-    if (!source || typeof FontFace === "undefined") return;
+    if (!source || typeof FontFace === "undefined") {
+      console.error(
+        `Failed to register imported font ${font.name}: ` +
+          (typeof FontFace === "undefined"
+            ? "the FontFace API is unavailable in this environment."
+            : "no usable font source (missing Tauri asset bridge or font path).")
+      );
+      return;
+    }
 
     try {
       const fontFace = new FontFace(font.family, source);

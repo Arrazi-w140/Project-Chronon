@@ -26,6 +26,18 @@ function renderStyledContent(el, text) {
     .join("");
 }
 
+// Maps a row's textCase setting to the CSS text-transform value that
+// achieves it. "none" (or any unrecognized value, e.g. from an older saved
+// setting) leaves casing exactly as computeContent() produced it — text-
+// transform only ever affects letters, so digits/punctuation are always
+// unaffected regardless of which case is chosen.
+const TEXT_CASE_TRANSFORMS = {
+  none: "none",
+  upper: "uppercase",
+  lower: "lowercase",
+  title: "capitalize",
+};
+
 function hexToRgba(hex, alpha) {
   const clean = hex.replace("#", "");
   const r = parseInt(clean.substring(0, 2), 16);
@@ -119,6 +131,7 @@ function renderWidgetRows(rootEl, settings) {
     el.style.fontSize = `${r.size}px`;
     el.style.color = r.color;
     el.style.textAlign = r.align;
+    el.style.textTransform = TEXT_CASE_TRANSFORMS[r.textCase] || "none";
     el.style.marginTop = i === 0
       ? "0px"
       : `${spacingAfter(visible[i - 1].r.row, r.row, settings)}px`;
