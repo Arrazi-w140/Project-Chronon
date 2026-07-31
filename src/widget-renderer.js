@@ -41,12 +41,15 @@ function hexToRgba(hex, alpha) {
 // for settings saved before Vertical/Horizontal Size were split apart.
 function renderWidgetChrome(rootEl, settings) {
   const opacity = Number(settings.widgetBgOpacity) / 100;
-  const legacySize = settings.widgetBgSize != null ? Number(settings.widgetBgSize) : 14;
-  const boxSizeV = settings.widgetBgSizeV != null ? Number(settings.widgetBgSizeV) : legacySize;
-  const boxSizeH = settings.widgetBgSizeH != null ? Number(settings.widgetBgSizeH) : legacySize;
   rootEl.style.background = hexToRgba(settings.widgetBg, opacity);
-  rootEl.style.padding = opacity > 0 ? `${boxSizeV}px ${boxSizeH}px` : "0px";
+  rootEl.style.padding = opacity > 0 ? "14px" : "0px";
   rootEl.style.borderRadius = opacity > 0 ? "6px" : "0px";
+}
+
+function widgetScaleFactor(settings) {
+  const scalePercent = Number(settings.widgetScale);
+  if (!Number.isFinite(scalePercent)) return 1;
+  return Math.min(5, Math.max(0.1, scalePercent / 100));
 }
 
 // Renders the row stack in the configured order, skipping "None" rows
@@ -100,6 +103,8 @@ function renderWidgetRows(rootEl, settings) {
 // given settings object. This is the only function callers need.
 function renderWidget(rootEl, settings) {
   if (!rootEl || !settings) return;
+  rootEl.style.transform = `scale(${widgetScaleFactor(settings)})`;
+  rootEl.style.transformOrigin = "center";
   renderWidgetChrome(rootEl, settings);
   renderWidgetRows(rootEl, settings);
 }

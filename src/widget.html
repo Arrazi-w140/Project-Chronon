@@ -29,7 +29,11 @@
       cursor: default;
     }
     #widgetRoot {
-      width: 100%;
+      /* Keep the unscaled design width stable while the native window follows
+         the transformed widget bounds. */
+      width: 280px;
+      max-width: none;
+      flex: 0 0 auto;
     }
   </style>
 </head>

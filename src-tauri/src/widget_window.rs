@@ -30,7 +30,7 @@
 use serde_json::Value;
 use std::sync::Mutex;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder,
     WindowEvent,
 };
 #[cfg(target_os = "windows")]
@@ -190,6 +190,24 @@ pub fn set_widget_position(app: AppHandle, x: f64, y: f64) -> Result<(), String>
         .ok_or_else(|| "No widget is currently on the desktop.".to_string())?;
     window
         .set_position(LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+/// Resize the transparent desktop window to the transformed widget bounds.
+/// The widget page supplies its measured CSS-pixel dimensions after applying
+/// the single global scale, so this layer never needs to know the setting's
+/// schema or scale math.
+#[tauri::command]
+pub fn set_widget_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("Widget size must be positive and finite.".to_string());
+    }
+
+    let window = app
+        .get_webview_window(WIDGET_LABEL)
+        .ok_or_else(|| "No widget is currently on the desktop.".to_string())?;
+    window
+        .set_size(LogicalSize::new(width, height))
         .map_err(|e| e.to_string())
 }
 

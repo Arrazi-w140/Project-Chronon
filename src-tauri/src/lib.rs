@@ -21,6 +21,7 @@ pub fn run() {
             widget_window::delete_widget,          // 
             widget_window::is_widget_active,       // 
             widget_window::set_widget_position,    // 
+            widget_window::set_widget_size,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
