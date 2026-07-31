@@ -69,11 +69,18 @@ const PRESET_COLORS = [
   { hex: "#F472B6", label: "Pink" },
 ];
 
-function colorSwatchesHtml() {
-  return PRESET_COLORS.map(
+function colorSwatchesHtml(colors = PRESET_COLORS) {
+  return colors.map(
     (c) => `<button type="button" class="color-swatch" data-color="${c.hex}" style="background:${c.hex}" title="${c.label}" aria-label="${c.label}"></button>`
   ).join("");
 }
+
+// Curated subset of PRESET_COLORS used for the Row cards' Quick Colors only
+// (General's background swatches keep the full list above). Kept short so
+// it always renders as a single row: one neutral pair, the app's own accent
+// gold, then one warm/cool/green/purple pick for broad, balanced coverage.
+const ROW_QUICK_COLORS = ["#FFFFFF", "#0A0B0D", "#D9A441", "#E5484D", "#4FC3F7", "#10B981", "#A855F7"]
+  .map((hex) => PRESET_COLORS.find((c) => c.hex === hex));
 
 // NOTE: the date/time format registry (FORMAT_REGISTRY, FORMAT_GROUPS,
 // CONTENT_LABELS, computeContent, LANGUAGE_OPTIONS, LANGUAGE_LOCALES, and
@@ -103,6 +110,17 @@ function typeOptionsHtml(selected) {
   }).join("");
 }
 
+// The Size slider still stores/controls the actual font-size in pixels —
+// only its readout is shown as a percentage, mapped linearly across the
+// slider's full range so the minimum reads 1% and the maximum reads 100%.
+const ROW_SIZE_MIN_PX = 12;
+const ROW_SIZE_MAX_PX = 60;
+
+function sizePxToPercent(px) {
+  const pct = 1 + ((Number(px) - ROW_SIZE_MIN_PX) * 99) / (ROW_SIZE_MAX_PX - ROW_SIZE_MIN_PX);
+  return Math.round(pct);
+}
+
 function createRowCardEl(cfg) {
   const section = document.createElement("section");
   section.className = "card row-card collapsed";
@@ -123,8 +141,24 @@ function createRowCardEl(cfg) {
           </div>
 
           <div class="field">
-            <label>Size <span class="size-readout">${cfg.size}px</span></label>
-            <input type="range" class="row-size" min="12" max="72" value="${cfg.size}" />
+            <label>Size <span class="size-readout">${sizePxToPercent(cfg.size)}%</span></label>
+            <input type="range" class="row-size" min="12" max="60" value="${cfg.size}" />
+          </div>
+
+          <div class="field">
+            <label>Language</label>
+            <select class="row-language">${optionsHtml(LANGUAGE_OPTIONS, cfg.language)}</select>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label>Text Font</label>
+              <select class="row-text-font">${optionsHtml(FONT_OPTIONS, cfg.textFont)}</select>
+            </div>
+            <div class="field">
+              <label>Number Font</label>
+              <select class="row-number-font">${optionsHtml(FONT_OPTIONS, cfg.numberFont)}</select>
+            </div>
           </div>
 
           <div class="field">
@@ -134,23 +168,7 @@ function createRowCardEl(cfg) {
               <span class="hex-readout">${cfg.color.toUpperCase()}</span>
             </div>
             <div class="swatches-label">Quick Colors</div>
-            <div class="color-swatches">${colorSwatchesHtml()}</div>
-          </div>
-
-          <div class="field-row">
-            <div class="field">
-              <label>Number Font</label>
-              <select class="row-number-font">${optionsHtml(FONT_OPTIONS, cfg.numberFont)}</select>
-            </div>
-            <div class="field">
-              <label>Text Font</label>
-              <select class="row-text-font">${optionsHtml(FONT_OPTIONS, cfg.textFont)}</select>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>Language</label>
-            <select class="row-language">${optionsHtml(LANGUAGE_OPTIONS, cfg.language)}</select>
+            <div class="color-swatches">${colorSwatchesHtml(ROW_QUICK_COLORS)}</div>
           </div>
 
           <div class="field">
@@ -350,7 +368,7 @@ function setupRowsDelegation() {
   container.addEventListener("input", (e) => {
     if (e.target.matches(".row-size")) {
       const readout = e.target.closest(".field").querySelector(".size-readout");
-      if (readout) readout.textContent = `${e.target.value}px`;
+      if (readout) readout.textContent = `${sizePxToPercent(e.target.value)}%`;
     }
     if (e.target.matches(".row-color")) {
       const hex = e.target.closest(".color-field").querySelector(".hex-readout");
@@ -455,19 +473,6 @@ function renumberOrderPositions() {
   document.querySelectorAll("#orderList li").forEach((li, i) => {
     const pos = li.querySelector(".order-pos");
     if (pos) pos.textContent = i + 1;
-  });
-}
-
-// ---------- save ----------
-
-function setupSave() {
-  const btn = document.getElementById("saveBtn");
-  const status = document.getElementById("saveStatus");
-  btn.addEventListener("click", () => {
-    const settings = readAllSettings();
-    localStorage.setItem("widgetTimeSettings", JSON.stringify(settings));
-    status.textContent = "Saved";
-    setTimeout(() => (status.textContent = ""), 2000);
   });
 }
 
@@ -697,7 +702,7 @@ function restoreSettings() {
       card.querySelector(".row-size").value = r.size;
       card.querySelector(".row-color").value = r.color;
       card.querySelector(".row-language").value = r.language || "en";
-      card.querySelector(".size-readout").textContent = `${r.size}px`;
+      card.querySelector(".size-readout").textContent = `${sizePxToPercent(r.size)}%`;
       card.querySelector(".hex-readout").textContent = (r.color || "").toUpperCase();
       card.querySelectorAll(".align-btn").forEach((b) => {
         b.classList.toggle("active", b.dataset.align === r.align);
@@ -810,7 +815,6 @@ window.addEventListener("DOMContentLoaded", () => {
   setupOpacityReadout();
   setupOrderDragDrop();
   setupColorSwatches();
-  setupSave();
   setupPush();
   setupDelete();
   setupWidgetClosedListener();
