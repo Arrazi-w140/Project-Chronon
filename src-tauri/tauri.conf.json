@@ -12,9 +12,9 @@
       {
         "title": "widget-time",
         "width": 1050,
-        "height": 650,
+        "height": 700,
         "minWidth": 1050,
-        "minHeight": 650
+        "minHeight": 700
       }
     ],
     "security": {
