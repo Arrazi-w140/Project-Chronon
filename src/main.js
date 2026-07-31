@@ -7,6 +7,8 @@
 // =========================================================================
 
 const DEFAULT_FONT = "system-ui, -apple-system, sans-serif";
+const DEFAULT_ROW_SPACING = 4;
+const MAX_ROW_SPACING = 64;
 
 // Out-of-the-box defaults: Michroma for words, JetBrains Mono for digits.
 // Both are plain CSS font stacks, so unsupported glyphs (e.g. non-Latin
@@ -34,6 +36,166 @@ const FONT_OPTIONS = [
   { value: "Georgia, serif", label: "Georgia" },
   { value: "'Courier New', monospace", label: "Courier New" },
 ];
+
+let importedFonts = [];
+const importedFontFaces = new Map();
+
+function importedFontValue(font) {
+  return `"${font.family}", sans-serif`;
+}
+
+function allFontOptions() {
+  return [
+    ...FONT_OPTIONS,
+    ...importedFonts.map((font) => ({ value: importedFontValue(font), label: font.name })),
+  ];
+}
+
+function defaultFontFor(select) {
+  return select.classList.contains("row-text-font") ? DEFAULT_TEXT_FONT : DEFAULT_NUMBER_FONT;
+}
+
+function setFontSelectValue(select, value) {
+  select.value = value;
+  if (select.value !== value) select.value = defaultFontFor(select);
+}
+
+function refreshRowFontOptions() {
+  document.querySelectorAll(".row-text-font, .row-number-font").forEach((select) => {
+    const selected = select.value;
+    select.innerHTML = optionsHtml(allFontOptions(), selected);
+    setFontSelectValue(select, selected);
+  });
+}
+
+function fontSource(font) {
+  const convertFileSrc = tauriBridge && tauriBridge.core && tauriBridge.core.convertFileSrc;
+  if (!convertFileSrc || !font.path) return null;
+  return `url("${convertFileSrc(font.path)}") format("${font.format}")`;
+}
+
+async function registerImportedFont(font) {
+  if (importedFontFaces.has(font.id)) return;
+  const source = fontSource(font);
+  if (!source || typeof FontFace === "undefined") return;
+
+  try {
+    const fontFace = new FontFace(font.family, source);
+    await fontFace.load();
+    document.fonts.add(fontFace);
+    importedFontFaces.set(font.id, fontFace);
+  } catch (err) {
+    console.error(`Failed to register imported font ${font.name}`, err);
+  }
+}
+
+function renderImportedFonts() {
+  const list = document.getElementById("importedFontsList");
+  if (!list) return;
+  list.replaceChildren();
+
+  importedFonts.forEach((font) => {
+    const item = document.createElement("div");
+    item.className = "imported-font";
+
+    const info = document.createElement("div");
+    info.className = "imported-font-info";
+    const name = document.createElement("span");
+    name.className = "imported-font-name";
+    name.textContent = font.name;
+    const preview = document.createElement("span");
+    preview.className = "imported-font-preview";
+    preview.textContent = "The quick brown fox 0123456789";
+    preview.style.fontFamily = importedFontValue(font);
+    info.append(name, preview);
+
+    const remove = document.createElement("button");
+    remove.className = "btn btn-secondary imported-font-delete";
+    remove.type = "button";
+    remove.dataset.fontId = font.id;
+    remove.textContent = "Delete";
+    item.append(info, remove);
+    list.appendChild(item);
+  });
+}
+
+async function loadImportedFonts() {
+  if (!tauriInvoke) return;
+  try {
+    const fonts = await tauriInvoke("list_imported_fonts");
+    await Promise.all(fonts.map(registerImportedFont));
+    importedFonts = fonts;
+    refreshRowFontOptions();
+    renderImportedFonts();
+  } catch (err) {
+    console.error("Failed to load imported fonts", err);
+  }
+}
+
+function replaceDeletedFontInRows(font) {
+  const value = importedFontValue(font);
+  const replaced = [];
+  document.querySelectorAll(".row-text-font, .row-number-font").forEach((select) => {
+    if (select.value !== value) return;
+    replaced.push({ select, value: select.value });
+    select.value = defaultFontFor(select);
+  });
+  return replaced;
+}
+
+function setupFontManagement() {
+  const loadButton = document.getElementById("loadFontBtn");
+  const list = document.getElementById("importedFontsList");
+  if (!loadButton || !list) return;
+
+  loadButton.addEventListener("click", async () => {
+    if (!tauriInvoke) {
+      flashStatus("Loading fonts requires the Chronon app");
+      return;
+    }
+
+    loadButton.disabled = true;
+    try {
+      const added = await tauriInvoke("import_fonts");
+      await loadImportedFonts();
+      if (added.length) flashStatus(`${added.length} font${added.length === 1 ? "" : "s"} added`);
+    } catch (err) {
+      console.error("Failed to import fonts", err);
+      flashStatus("Couldn't load the selected font");
+    } finally {
+      loadButton.disabled = false;
+    }
+  });
+
+  list.addEventListener("click", async (e) => {
+    const deleteButton = e.target.closest(".imported-font-delete");
+    if (!deleteButton || !tauriInvoke) return;
+    const font = importedFonts.find((item) => item.id === deleteButton.dataset.fontId);
+    if (!font) return;
+
+    deleteButton.disabled = true;
+    const replaced = replaceDeletedFontInRows(font);
+    const wasInUse = replaced.length > 0;
+    if (wasInUse) handleSettingsChanged();
+
+    try {
+      await tauriInvoke("delete_imported_font", { id: font.id });
+      const fontFace = importedFontFaces.get(font.id);
+      if (fontFace) document.fonts.delete(fontFace);
+      importedFontFaces.delete(font.id);
+      await loadImportedFonts();
+      flashStatus(wasInUse ? "Font removed and affected rows reset" : "Font removed");
+    } catch (err) {
+      console.error("Failed to delete imported font", err);
+      replaced.forEach(({ select, value }) => {
+        select.value = value;
+      });
+      if (wasInUse) handleSettingsChanged();
+      flashStatus("Couldn't delete the font");
+      deleteButton.disabled = false;
+    }
+  });
+}
 
 // Quick-pick color presets shown under every color picker (General background
 // + each row's text color). One shared list so every picker in the app stays
@@ -165,11 +327,11 @@ function createRowCardEl(cfg) {
           <div class="field-row">
             <div class="field">
               <label>Text Font</label>
-              <select class="row-text-font">${optionsHtml(FONT_OPTIONS, cfg.textFont)}</select>
+              <select class="row-text-font">${optionsHtml(allFontOptions(), cfg.textFont)}</select>
             </div>
             <div class="field">
               <label>Number Font</label>
-              <select class="row-number-font">${optionsHtml(FONT_OPTIONS, cfg.numberFont)}</select>
+              <select class="row-number-font">${optionsHtml(allFontOptions(), cfg.numberFont)}</select>
             </div>
           </div>
 
@@ -237,20 +399,17 @@ function readRowCard(cardEl) {
   return { row, type, numberFont, textFont, size, color, language, align };
 }
 
-function getRowOrder() {
-  return Array.from(document.querySelectorAll("#orderList li")).map((li) => li.dataset.row);
-}
-
 function readAllSettings() {
   const rowCards = Array.from(document.querySelectorAll("#rowsContainer .row-card"));
   const rows = rowCards.map(readRowCard);
   const widgetBg = document.getElementById("widgetBg").value;
   const widgetBgOpacity = document.getElementById("widgetBgOpacity").value;
   const widgetScale = document.getElementById("widgetScale").value;
-  const rowOrder = getRowOrder();
+  const row1To2Spacing = document.getElementById("row1To2Spacing").value;
+  const row2To3Spacing = document.getElementById("row2To3Spacing").value;
   const posX = Number(document.getElementById("posX").value) || 0;
   const posY = Number(document.getElementById("posY").value) || 0;
-  return { widgetBg, widgetBgOpacity, widgetScale, rows, rowOrder, posX, posY };
+  return { widgetBg, widgetBgOpacity, widgetScale, row1To2Spacing, row2To3Spacing, rows, posX, posY };
 }
 
 // ---------- live preview ----------
@@ -262,12 +421,9 @@ function readAllSettings() {
 // on the desktop (see "live sync" below).
 function updatePreview() {
   const settings = readAllSettings();
-  const rowsByNumber = {};
-  settings.rows.forEach((r) => (rowsByNumber[r.row] = r));
 
   renderWidget(document.getElementById("widgetMock"), settings);
 
-  updateOrderMeta(rowsByNumber);
   updateRowColorDots(settings.rows);
 }
 
@@ -278,16 +434,16 @@ function updatePreview() {
 // already ticks its own clock independently.
 function handleSettingsChanged() {
   updatePreview();
+  saveSettings();
   syncWidgetIfActive();
 }
 
-// Show each row's current type next to it in the "Row order" list.
-function updateOrderMeta(rowsByNumber) {
-  document.querySelectorAll("#orderList li").forEach((li) => {
-    const r = rowsByNumber[li.dataset.row];
-    const meta = li.querySelector(".order-meta");
-    if (meta && r) meta.textContent = CONTENT_LABELS[r.type] || "";
-  });
+function saveSettings() {
+  try {
+    localStorage.setItem("widgetTimeSettings", JSON.stringify(readAllSettings()));
+  } catch (err) {
+    console.warn("Failed to save widget settings", err);
+  }
 }
 
 // Reflect each row's chosen color as a small swatch on its header,
@@ -444,6 +600,7 @@ function setupPositionLiveInputs() {
 }
 
 function handlePositionChanged() {
+  saveSettings();
   if (!widgetActive || !tauriInvoke) return;
   const x = Number(document.getElementById("posX").value) || 0;
   const y = Number(document.getElementById("posY").value) || 0;
@@ -461,56 +618,30 @@ function setupOpacityReadout() {
   });
 }
 
-// ---------- drag-to-reorder rows ----------
+// ---------- General section: row spacing ----------
 
-function setupOrderDragDrop() {
-  const list = document.getElementById("orderList");
-  if (!list) return;
+function formatSpacing(value) {
+  return `${Number(value)}px`;
+}
 
-  list.querySelectorAll("li").forEach((li) => {
-    li.addEventListener("dragstart", () => {
-      li.classList.add("dragging");
-    });
-    li.addEventListener("dragend", () => {
-      li.classList.remove("dragging");
-      renumberOrderPositions();
+function normalizeRowSpacing(value) {
+  if (value == null) return DEFAULT_ROW_SPACING;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_ROW_SPACING;
+  return Math.min(MAX_ROW_SPACING, Math.max(0, parsed));
+}
+
+function setupRowSpacingInputs() {
+  [
+    ["row1To2Spacing", "row1To2SpacingValue"],
+    ["row2To3Spacing", "row2To3SpacingValue"],
+  ].forEach(([sliderId, readoutId]) => {
+    const slider = document.getElementById(sliderId);
+    const readout = document.getElementById(readoutId);
+    slider.addEventListener("input", () => {
+      readout.textContent = formatSpacing(slider.value);
       handleSettingsChanged();
     });
-  });
-
-  list.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    const dragging = list.querySelector(".dragging");
-    if (!dragging) return;
-    const afterElement = getDragAfterElement(list, e.clientY);
-    if (afterElement == null) {
-      list.appendChild(dragging);
-    } else {
-      list.insertBefore(dragging, afterElement);
-    }
-    renumberOrderPositions();
-  });
-}
-
-function getDragAfterElement(container, y) {
-  const items = [...container.querySelectorAll("li:not(.dragging)")];
-  return items.reduce(
-    (closest, child) => {
-      const box = child.getBoundingClientRect();
-      const offset = y - box.top - box.height / 2;
-      if (offset < 0 && offset > closest.offset) {
-        return { offset, element: child };
-      }
-      return closest;
-    },
-    { offset: Number.NEGATIVE_INFINITY, element: null }
-  ).element;
-}
-
-function renumberOrderPositions() {
-  document.querySelectorAll("#orderList li").forEach((li, i) => {
-    const pos = li.querySelector(".order-pos");
-    if (pos) pos.textContent = i + 1;
   });
 }
 
@@ -734,6 +865,12 @@ function restoreSettings() {
     const widgetScale = settings.widgetScale != null ? settings.widgetScale : 100;
     document.getElementById("widgetScale").value = widgetScale;
     document.getElementById("widgetScaleValue").textContent = `${widgetScale}%`;
+    const row1To2Spacing = normalizeRowSpacing(settings.row1To2Spacing);
+    const row2To3Spacing = normalizeRowSpacing(settings.row2To3Spacing);
+    document.getElementById("row1To2Spacing").value = row1To2Spacing;
+    document.getElementById("row1To2SpacingValue").textContent = formatSpacing(row1To2Spacing);
+    document.getElementById("row2To3Spacing").value = row2To3Spacing;
+    document.getElementById("row2To3SpacingValue").textContent = formatSpacing(row2To3Spacing);
     document.getElementById("posX").value = settings.posX || 0;
     document.getElementById("posY").value = settings.posY || 0;
 
@@ -743,8 +880,8 @@ function restoreSettings() {
       card.querySelector(".row-type").value = FORMAT_REGISTRY[r.type] ? r.type : "none";
       // Fall back to the old single "font" field for settings saved before
       // Number/Text fonts existed, so previously saved widgets keep working.
-      card.querySelector(".row-number-font").value = r.numberFont || r.font || DEFAULT_FONT;
-      card.querySelector(".row-text-font").value = r.textFont || r.font || DEFAULT_FONT;
+      setFontSelectValue(card.querySelector(".row-number-font"), r.numberFont || r.font || DEFAULT_FONT);
+      setFontSelectValue(card.querySelector(".row-text-font"), r.textFont || r.font || DEFAULT_FONT);
       card.querySelector(".row-size").value = r.size;
       card.querySelector(".row-color").value = r.color;
       card.querySelector(".row-language").value = r.language || "en";
@@ -755,13 +892,6 @@ function restoreSettings() {
       });
     });
 
-    if (Array.isArray(settings.rowOrder) && settings.rowOrder.length) {
-      const list = document.getElementById("orderList");
-      settings.rowOrder.forEach((rowNum) => {
-        const li = list.querySelector(`li[data-row="${rowNum}"]`);
-        if (li) list.appendChild(li);
-      });
-    }
   } catch (e) {
     console.error("Failed to restore settings", e);
   }
@@ -851,7 +981,7 @@ function setupSidebarPages() {
 
 // ---------- init ----------
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   renderRows();
   populateGeneralSwatches();
   setupAccordionToggles();
@@ -860,15 +990,16 @@ window.addEventListener("DOMContentLoaded", () => {
   setupGeneralSizeReadout();
   setupPositionLiveInputs();
   setupOpacityReadout();
-  setupOrderDragDrop();
+  setupRowSpacingInputs();
   setupColorSwatches();
+  setupFontManagement();
   setupPush();
   setupDelete();
   setupWidgetClosedListener();
   setupSidebarToggle();
   setupSidebarPages();
+  await loadImportedFonts();
   restoreSettings();
-  renumberOrderPositions();
   syncAllSwatchSelections();
   updatePreview();
   startClockTick();

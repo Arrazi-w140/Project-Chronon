@@ -52,18 +52,45 @@ function widgetScaleFactor(settings) {
   return Math.min(5, Math.max(0.1, scalePercent / 100));
 }
 
+// The widget previously used a fixed 4px flex gap between every row. Keep
+// that value as the default while allowing the two named row pairs to be
+// adjusted independently. Values are clamped so malformed saved settings can
+// never turn into negative spacing and make rows overlap.
+const DEFAULT_ROW_SPACING_PX = 4;
+const MAX_ROW_SPACING_PX = 64;
+
+function rowSpacing(value) {
+  if (value == null) return DEFAULT_ROW_SPACING_PX;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_ROW_SPACING_PX;
+  return Math.min(MAX_ROW_SPACING_PX, Math.max(0, parsed));
+}
+
+function spacingAfter(previousRow, currentRow, settings) {
+  if (previousRow === "1" && currentRow === "2") {
+    return rowSpacing(settings.row1To2Spacing);
+  }
+  if (previousRow === "2" && currentRow === "3") {
+    return rowSpacing(settings.row2To3Spacing);
+  }
+  return DEFAULT_ROW_SPACING_PX;
+}
+
 // Renders the row stack in the configured order, skipping "None" rows
 // entirely. Reuses existing row elements in place where possible (matched
 // by position + row id) rather than tearing everything down every call —
 // this runs on every clock tick, so it stays cheap and doesn't interrupt
 // any future per-row transitions.
 function renderWidgetRows(rootEl, settings) {
+  // Apply spacing per adjacent row pair instead of a single flex `gap`, so a
+  // slider can change only its named pair while every other gap remains 4px.
+  rootEl.style.gap = "0px";
+
   const rowsByNumber = {};
   settings.rows.forEach((r) => (rowsByNumber[r.row] = r));
 
-  const order = Array.isArray(settings.rowOrder) && settings.rowOrder.length
-    ? settings.rowOrder
-    : settings.rows.map((r) => r.row);
+  // Rows always render in their configured Row 1 / Row 2 / Row 3 sequence.
+  const order = settings.rows.map((r) => r.row);
 
   const visible = [];
   order.forEach((rowNum) => {
@@ -92,6 +119,9 @@ function renderWidgetRows(rootEl, settings) {
     el.style.fontSize = `${r.size}px`;
     el.style.color = r.color;
     el.style.textAlign = r.align;
+    el.style.marginTop = i === 0
+      ? "0px"
+      : `${spacingAfter(visible[i - 1].r.row, r.row, settings)}px`;
   });
 
   while (rootEl.children.length > visible.length) {

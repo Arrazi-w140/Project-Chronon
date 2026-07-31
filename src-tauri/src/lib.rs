@@ -1,3 +1,4 @@
+mod font_library;
 mod widget_window;   // 
 #[cfg(target_os = "windows")]
 mod desktop_layer;   // WorkerW reparenting so the widget sits behind desktop icons (Windows only)
@@ -13,8 +14,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(widget_window::WidgetState::default())   //
+        .setup(|app| {
+            font_library::initialize(&app.handle())
+                .map_err(std::io::Error::other)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
+            font_library::import_fonts,
+            font_library::list_imported_fonts,
+            font_library::delete_imported_font,
             widget_window::push_widget,           // 
             widget_window::update_widget_config,   // 
             widget_window::get_widget_config,      //

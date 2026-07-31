@@ -135,34 +135,25 @@
                   <div class="row-divider" aria-hidden="true"></div>
 
                   <div class="field">
-                    <label>Row order</label>
-                    <ul class="order-list" id="orderList">
-                      <li data-row="1" draggable="true">
-                        <span class="order-pos">1</span>
-                        <span class="drag-handle" aria-hidden="true">⠿</span>
-                        <div class="order-info">
-                          <span class="order-name">Row 1</span>
-                          <span class="order-meta"></span>
-                        </div>
-                      </li>
-                      <li data-row="2" draggable="true">
-                        <span class="order-pos">2</span>
-                        <span class="drag-handle" aria-hidden="true">⠿</span>
-                        <div class="order-info">
-                          <span class="order-name">Row 2</span>
-                          <span class="order-meta"></span>
-                        </div>
-                      </li>
-                      <li data-row="3" draggable="true">
-                        <span class="order-pos">3</span>
-                        <span class="drag-handle" aria-hidden="true">⠿</span>
-                        <div class="order-info">
-                          <span class="order-name">Row 3</span>
-                          <span class="order-meta"></span>
-                        </div>
-                      </li>
-                    </ul>
-                    <p class="field-hint">Drag rows to change their stacking order in the widget.</p>
+                    <label>Row spacing</label>
+                    <div class="field-column spacing-fields">
+                      <div class="field">
+                        <label for="row1To2Spacing">Row 1 → Row 2 Spacing <span class="spacing-value" id="row1To2SpacingValue">4px</span></label>
+                        <input type="range" id="row1To2Spacing" min="0" max="64" step="0.1" value="4" />
+                      </div>
+                      <div class="field">
+                        <label for="row2To3Spacing">Row 2 → Row 3 Spacing <span class="spacing-value" id="row2To3SpacingValue">4px</span></label>
+                        <input type="range" id="row2To3Spacing" min="0" max="64" step="0.1" value="4" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
+
+                  <div class="field">
+                    <label>Fonts</label>
+                    <button id="loadFontBtn" class="btn btn-secondary font-load-btn" type="button">Load Font</button>
+                    <div class="imported-fonts-list" id="importedFontsList" aria-live="polite"></div>
                   </div>
                 </div>
               </div>
