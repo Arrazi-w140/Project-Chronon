@@ -246,11 +246,12 @@ function readAllSettings() {
   const rows = rowCards.map(readRowCard);
   const widgetBg = document.getElementById("widgetBg").value;
   const widgetBgOpacity = document.getElementById("widgetBgOpacity").value;
-  const widgetBgSize = document.getElementById("widgetBgSize").value;
+  const widgetBgSizeV = document.getElementById("widgetBgSizeV").value;
+  const widgetBgSizeH = document.getElementById("widgetBgSizeH").value;
   const rowOrder = getRowOrder();
   const posX = Number(document.getElementById("posX").value) || 0;
   const posY = Number(document.getElementById("posY").value) || 0;
-  return { widgetBg, widgetBgOpacity, widgetBgSize, rows, rowOrder, posX, posY };
+  return { widgetBg, widgetBgOpacity, widgetBgSizeV, widgetBgSizeH, rows, rowOrder, posX, posY };
 }
 
 // ---------- live preview ----------
@@ -415,13 +416,23 @@ function setupGeneralLiveInputs() {
 }
 
 // ---------- General section: Size (widget background box) ----------
+//
+// Vertical Size and Horizontal Size are independent sliders that each
+// control one dimension of the background box's padding (height/width
+// respectively) — same slider component, same behavior, just wired to
+// their own readout so they can be adjusted separately.
 
 function setupGeneralSizeReadout() {
-  const slider = document.getElementById("widgetBgSize");
-  const readout = document.getElementById("widgetBgSizeValue");
-  slider.addEventListener("input", () => {
-    readout.textContent = `${slider.value}px`;
-    handleSettingsChanged();
+  [
+    { sliderId: "widgetBgSizeV", readoutId: "widgetBgSizeVValue" },
+    { sliderId: "widgetBgSizeH", readoutId: "widgetBgSizeHValue" },
+  ].forEach(({ sliderId, readoutId }) => {
+    const slider = document.getElementById(sliderId);
+    const readout = document.getElementById(readoutId);
+    slider.addEventListener("input", () => {
+      readout.textContent = `${slider.value}px`;
+      handleSettingsChanged();
+    });
   });
 }
 
@@ -723,9 +734,16 @@ function restoreSettings() {
     if (generalHex) generalHex.textContent = (settings.widgetBg || "#000000").toUpperCase();
     document.getElementById("widgetBgOpacity").value = settings.widgetBgOpacity || 0;
     document.getElementById("widgetBgOpacityValue").textContent = `${settings.widgetBgOpacity || 0}%`;
-    const widgetBgSize = settings.widgetBgSize != null ? settings.widgetBgSize : 14;
-    document.getElementById("widgetBgSize").value = widgetBgSize;
-    document.getElementById("widgetBgSizeValue").textContent = `${widgetBgSize}px`;
+    // Migrate settings saved before Size was split: fall back to the old
+    // single widgetBgSize (then the original 14px default) for either
+    // dimension that hasn't been set independently yet.
+    const legacySize = settings.widgetBgSize != null ? settings.widgetBgSize : 14;
+    const widgetBgSizeV = settings.widgetBgSizeV != null ? settings.widgetBgSizeV : legacySize;
+    const widgetBgSizeH = settings.widgetBgSizeH != null ? settings.widgetBgSizeH : legacySize;
+    document.getElementById("widgetBgSizeV").value = widgetBgSizeV;
+    document.getElementById("widgetBgSizeVValue").textContent = `${widgetBgSizeV}px`;
+    document.getElementById("widgetBgSizeH").value = widgetBgSizeH;
+    document.getElementById("widgetBgSizeHValue").textContent = `${widgetBgSizeH}px`;
     document.getElementById("posX").value = settings.posX || 0;
     document.getElementById("posY").value = settings.posY || 0;
 

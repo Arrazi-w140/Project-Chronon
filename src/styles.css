@@ -507,6 +507,15 @@ html, body {
   min-width: 0;
 }
 
+/* Size field: Vertical/Horizontal sliders stacked one above the other
+   (unlike Position's side-by-side X/Y), sharing the same 16px rhythm as
+   .card-body so the group reads as a natural continuation of the list. */
+.field-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 input[type="text"],
 input[type="number"],
 select {

@@ -84,9 +84,19 @@
               <div class="accordion-inner" aria-hidden="true">
                 <div class="card-body">
                   <div class="field">
-                    <label for="widgetBgSize">Size <span class="size-readout" id="widgetBgSizeValue">14px</span></label>
-                    <input type="range" id="widgetBgSize" min="0" max="40" value="14" />
-                    <p class="field-hint">Controls the size of the background box behind the widget's text.</p>
+                    <label>Size</label>
+                    <div class="field-column size-fields">
+                      <div class="field">
+                        <label for="widgetBgSizeV">Vertical Size <span class="size-readout" id="widgetBgSizeVValue">14px</span></label>
+                        <input type="range" id="widgetBgSizeV" min="0" max="40" value="14" />
+                        <p class="field-hint">Controls the height of the background box behind the widget's text.</p>
+                      </div>
+                      <div class="field">
+                        <label for="widgetBgSizeH">Horizontal Size <span class="size-readout" id="widgetBgSizeHValue">14px</span></label>
+                        <input type="range" id="widgetBgSizeH" min="0" max="40" value="14" />
+                        <p class="field-hint">Controls the width of the background box behind the widget's text.</p>
+                      </div>
+                    </div>
                   </div>
 
                   <div class="row-divider" aria-hidden="true"></div>
