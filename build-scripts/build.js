@@ -23,12 +23,16 @@
 // binary gets packaged and handed off.
 // ================================================================
 
-const fs = require("fs");
-const path = require("path");
-const { execSync } = require("child_process");
+import fs from "fs";
+import path from "path";
+import { execSync } from "child_process";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const ROOT = path.join(__dirname, "..");
-const pkg = require(path.join(ROOT, "package.json"));
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
 
 const NSIS_BUNDLE_DIR = path.join(ROOT, "src-tauri", "target", "release", "bundle", "nsis");
 const RELEASE_DIR = path.join(ROOT, "release");

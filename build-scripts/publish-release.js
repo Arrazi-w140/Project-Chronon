@@ -23,11 +23,15 @@
 // when that day comes.
 // ================================================================
 
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const ROOT = path.join(__dirname, "..");
-const pkg = require(path.join(ROOT, "package.json"));
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
 
 const OWNER = "Arrazi-w140";
 const REPO = "Project-Chronon";
