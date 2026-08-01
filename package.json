@@ -1,10 +1,16 @@
 {
-  "name": "widget-time",
+  "name": "chronon",
   "private": true,
   "version": "0.1.0",
+  "description": "Chronon — a lightweight, customizable desktop time & date widget.",
+  "author": "Arrazi",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "node build-scripts/build.js",
+    "release": "node build-scripts/build.js --publish"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

@@ -432,6 +432,15 @@ html, body {
   line-height: 1.6;
 }
 
+/* ---------- Fonts page (Load Font button + imported fonts list) ---------- */
+
+.fonts-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px 28px;
+}
+
 /* ---------- form fields ---------- */
 
 .field {

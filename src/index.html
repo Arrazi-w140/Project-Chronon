@@ -37,6 +37,16 @@
           </span>
           <span class="nav-label">Presets</span>
         </button>
+
+        <button class="nav-item" data-page="fonts" type="button" title="Fonts">
+          <span class="nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4.5 16 9.5 4l5 12" />
+              <path d="M6.6 11.2h5.8" />
+            </svg>
+          </span>
+          <span class="nav-label">Fonts</span>
+        </button>
       </div>
 
       <div class="nav-group nav-group-utility">
@@ -148,13 +158,6 @@
                     </div>
                   </div>
 
-                  <div class="row-divider" aria-hidden="true"></div>
-
-                  <div class="field">
-                    <label>Fonts</label>
-                    <button id="loadFontBtn" class="btn btn-secondary font-load-btn" type="button">Load Font</button>
-                    <div class="imported-fonts-list" id="importedFontsList" aria-live="polite"></div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -178,6 +181,13 @@
           </span>
           <h2>Presets</h2>
           <p>Save and switch between widget presets here.</p>
+        </div>
+
+        <div class="page-panel" data-page-panel="fonts" hidden>
+          <div class="fonts-page">
+            <button id="loadFontBtn" class="btn btn-secondary font-load-btn" type="button">Load Font</button>
+            <div class="imported-fonts-list" id="importedFontsList" aria-live="polite"></div>
+          </div>
         </div>
 
         <div class="page-panel placeholder-page" data-page-panel="settings" hidden>

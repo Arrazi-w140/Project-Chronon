@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Packaged installers produced by `npm run build` / `npm run release`
+# (the source of truth is src-tauri/target/release/bundle/, this is
+# just the friendly-named copy — see build-scripts/build.js)
+/release
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
