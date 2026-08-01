@@ -78,6 +78,22 @@ function rowSpacing(value) {
   return Math.min(MAX_ROW_SPACING_PX, Math.max(0, parsed));
 }
 
+// Per-row `letter-spacing`, in px. Mirrors main.js's MIN/MAX_LETTER_SPACING
+// slider bounds so malformed/out-of-range saved values (or a value pushed
+// live from a mismatched editor build) can never render outside what the
+// slider itself allows. Missing/invalid values fall back to 0 — i.e. the
+// same default spacing rows had before this control existed.
+const DEFAULT_LETTER_SPACING_PX = 0;
+const MIN_LETTER_SPACING_PX = -5;
+const MAX_LETTER_SPACING_PX = 20;
+
+function letterSpacing(value) {
+  if (value == null) return DEFAULT_LETTER_SPACING_PX;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_LETTER_SPACING_PX;
+  return Math.min(MAX_LETTER_SPACING_PX, Math.max(MIN_LETTER_SPACING_PX, parsed));
+}
+
 function spacingAfter(previousRow, currentRow, settings) {
   if (previousRow === "1" && currentRow === "2") {
     return rowSpacing(settings.row1To2Spacing);
@@ -129,6 +145,7 @@ function renderWidgetRows(rootEl, settings) {
     el.style.setProperty("--number-font", r.numberFont);
     el.style.setProperty("--text-font", r.textFont);
     el.style.fontSize = `${r.size}px`;
+    el.style.letterSpacing = `${letterSpacing(r.letterSpacing)}px`;
     el.style.color = r.color;
     el.style.textAlign = r.align;
     el.style.textTransform = TEXT_CASE_TRANSFORMS[r.textCase] || "none";

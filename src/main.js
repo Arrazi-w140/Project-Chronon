@@ -10,6 +10,13 @@ const DEFAULT_FONT = "system-ui, -apple-system, sans-serif";
 const DEFAULT_ROW_SPACING = 4;
 const MAX_ROW_SPACING = 64;
 
+// Per-row letter spacing (CSS `letter-spacing`, in px). Negative values are
+// allowed so characters can be tightened as well as spread out; 0 matches
+// the previous, only behavior (browser default spacing).
+const DEFAULT_LETTER_SPACING = 0;
+const MIN_LETTER_SPACING = -5;
+const MAX_LETTER_SPACING = 20;
+
 // Out-of-the-box defaults: Michroma for words, JetBrains Mono for digits.
 // Both are plain CSS font stacks, so unsupported glyphs (e.g. non-Latin
 // scripts Michroma doesn't cover) fall back to the system UI font
@@ -18,9 +25,9 @@ const DEFAULT_TEXT_FONT = "'Michroma', system-ui, sans-serif";
 const DEFAULT_NUMBER_FONT = "'JetBrains Mono', 'Courier New', monospace";
 
 const ROW_DEFAULTS = [
-  { row: "1", type: "dayName", size: 48, color: "#FFFFFF", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none" },
-  { row: "2", type: "time24Sec", size: 32, color: "#D9A441", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none" },
-  { row: "3", type: "monthYear", size: 20, color: "#C7CCD1", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none" },
+  { row: "1", type: "dayName", size: 48, color: "#FFFFFF", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none", letterSpacing: DEFAULT_LETTER_SPACING },
+  { row: "2", type: "time24Sec", size: 32, color: "#D9A441", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none", letterSpacing: DEFAULT_LETTER_SPACING },
+  { row: "3", type: "monthYear", size: 20, color: "#C7CCD1", numberFont: DEFAULT_NUMBER_FONT, textFont: DEFAULT_TEXT_FONT, language: "en", align: "center", textCase: "none", letterSpacing: DEFAULT_LETTER_SPACING },
 ];
 
 // Letter-case transform buttons shown under Text Font. "none" (no button
@@ -328,6 +335,13 @@ function sizePxToPercent(px) {
   return Math.round(pct);
 }
 
+function normalizeLetterSpacing(value) {
+  if (value == null) return DEFAULT_LETTER_SPACING;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_LETTER_SPACING;
+  return Math.min(MAX_LETTER_SPACING, Math.max(MIN_LETTER_SPACING, parsed));
+}
+
 function createRowCardEl(cfg) {
   const section = document.createElement("section");
   section.className = "card row-card collapsed";
@@ -382,6 +396,13 @@ function createRowCardEl(cfg) {
           <div class="row-divider" aria-hidden="true"></div>
 
           <div class="field">
+            <label>Letter Spacing <span class="spacing-value row-letter-spacing-readout">${formatSpacing(cfg.letterSpacing)}</span></label>
+            <input type="range" class="row-letter-spacing" min="${MIN_LETTER_SPACING}" max="${MAX_LETTER_SPACING}" step="0.5" value="${cfg.letterSpacing}" />
+          </div>
+
+          <div class="row-divider" aria-hidden="true"></div>
+
+          <div class="field">
             <label>Color</label>
             <div class="color-row">
               <div class="color-field">
@@ -406,7 +427,7 @@ function createRowCardEl(cfg) {
 
           <div class="row-divider" aria-hidden="true"></div>
 
-          <!-- Reserved space for future controls (letter spacing, shadow, opacity, etc.) -->
+          <!-- Reserved space for future controls (shadow, opacity, etc.) -->
           <div class="future-settings">
             <span class="future-settings-dot" aria-hidden="true"></span>
             More settings coming soon
@@ -439,13 +460,14 @@ function readRowCard(cardEl) {
   const numberFont = cardEl.querySelector(".row-number-font").value;
   const textFont = cardEl.querySelector(".row-text-font").value;
   const size = cardEl.querySelector(".row-size").value;
+  const letterSpacing = cardEl.querySelector(".row-letter-spacing").value;
   const color = cardEl.querySelector(".row-color").value;
   const language = cardEl.querySelector(".row-language").value;
   const alignBtn = cardEl.querySelector(".align-btn.active");
   const align = alignBtn ? alignBtn.dataset.align : "center";
   const caseBtn = cardEl.querySelector(".case-btn.active");
   const textCase = caseBtn ? caseBtn.dataset.case : "none";
-  return { row, type, numberFont, textFont, size, color, language, align, textCase };
+  return { row, type, numberFont, textFont, size, letterSpacing, color, language, align, textCase };
 }
 
 function readAllSettings() {
@@ -603,6 +625,10 @@ function setupRowsDelegation() {
     if (e.target.matches(".row-size")) {
       const readout = e.target.closest(".field").querySelector(".size-readout");
       if (readout) readout.textContent = `${sizePxToPercent(e.target.value)}%`;
+    }
+    if (e.target.matches(".row-letter-spacing")) {
+      const readout = e.target.closest(".field").querySelector(".row-letter-spacing-readout");
+      if (readout) readout.textContent = formatSpacing(e.target.value);
     }
     if (e.target.matches(".row-color")) {
       const hex = e.target.closest(".color-field").querySelector(".hex-readout");
@@ -941,6 +967,9 @@ function restoreSettings() {
       setFontSelectValue(card.querySelector(".row-number-font"), r.numberFont || r.font || DEFAULT_FONT);
       setFontSelectValue(card.querySelector(".row-text-font"), r.textFont || r.font || DEFAULT_FONT);
       card.querySelector(".row-size").value = r.size;
+      const letterSpacing = normalizeLetterSpacing(r.letterSpacing);
+      card.querySelector(".row-letter-spacing").value = letterSpacing;
+      card.querySelector(".row-letter-spacing-readout").textContent = formatSpacing(letterSpacing);
       card.querySelector(".row-color").value = r.color;
       card.querySelector(".row-language").value = r.language || "en";
       card.querySelector(".size-readout").textContent = `${sizePxToPercent(r.size)}%`;
