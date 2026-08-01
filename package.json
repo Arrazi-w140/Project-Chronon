@@ -1,7 +1,7 @@
 {
   "name": "chronon",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Chronon — a lightweight, customizable desktop time & date widget.",
   "author": "Arrazi",
   "license": "UNLICENSED",

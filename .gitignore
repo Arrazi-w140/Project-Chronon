@@ -17,6 +17,10 @@ dist-ssr
 # just the friendly-named copy — see build-scripts/build.js)
 /release
 
+# Local-only release secrets (signing key password, GitHub token) —
+# see RELEASE.md. Never commit this file.
+/.release-secrets.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -2,30 +2,34 @@
 // build-scripts/publish-release.js
 // ----------------------------------------------------------------
 // Publishes the contents of `release/` (produced by build.js) to a
-// draft GitHub release — the same "draft first, hit publish when
-// you're happy with it" workflow Project Playnck uses.
+// GitHub release for the current version, then publishes it
+// immediately — no manual "hit publish on GitHub" step.
 //
-// Requires GH_TOKEN or GITHUB_TOKEN in the environment. Without a
-// token this is a no-op — `npm run build` never needs one, only
-// `npm run release` does.
+// It's still created as a draft internally for a moment first: asking
+// GitHub to create a release as already-published on a brand new tag
+// intermittently fails with a 422 ("Published releases must have a
+// valid tag") before the tag has had time to settle server-side.
+// Creating as a draft, uploading every asset, then flipping it to
+// published as the very last step avoids that.
 //
-// Safe to re-run: if a draft for this version already exists, its
+// Needs GH_TOKEN or GITHUB_TOKEN — loaded automatically from
+// .release-secrets.json if neither is already set in the environment;
+// see load-release-secrets.js and RELEASE.md. Without a token this is
+// a no-op — `npm run build` never needs one, only `npm run release`
+// does.
+//
+// Safe to re-run: if a release for this version already exists, its
 // assets are replaced (delete-then-upload per file) rather than
-// duplicated, so fixing something and re-running never leaves stale
-// or doubled-up assets behind.
-//
-// Forward-compatible with auto-updates: once tauri-plugin-updater is
-// wired up (signing key generated, plugin added, bundle.
-// createUpdaterArtifacts enabled), `tauri build` will also emit a
-// `.sig` file and a `latest.json` manifest next to the installer.
-// build.js already copies those into release/ when present, and this
-// script uploads everything it finds there — no changes needed here
-// when that day comes.
+// duplicated, and if it's already published, the final publish step
+// just confirms that and does nothing further.
 // ================================================================
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { loadGithubToken } from "./load-release-secrets.js";
+
+loadGithubToken();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,10 +105,38 @@ async function uploadAsset(release, filePath) {
   console.log(`Uploaded ${name}`);
 }
 
+// Flips a draft release to published, with a couple of retries — the
+// "Published releases must have a valid tag" 422 mentioned up top has
+// been intermittent even at this stage, moments after the tag itself
+// was created. Mirrors Project Playnck's reconcile-github-release.js.
+async function publishRelease(release) {
+  if (release.draft === false) {
+    console.log(`Release ${release.html_url} is already published.`);
+    return release;
+  }
+
+  const attempts = 3;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const published = await gh("PATCH", `/repos/${OWNER}/${REPO}/releases/${release.id}`, { draft: false });
+      console.log(`Published: ${published.html_url}`);
+      return published;
+    } catch (err) {
+      if (i === attempts) {
+        console.warn(`Could not auto-publish after ${attempts} attempts (${err.message}).`);
+        console.warn(`The release is uploaded and ready — publish it manually from: ${release.html_url}`);
+        return release;
+      }
+      console.log(`Publish attempt ${i} failed, retrying in 5s... (${err.message})`);
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+}
+
 async function main() {
   if (!TOKEN) {
-    console.log("No GH_TOKEN/GITHUB_TOKEN set — skipping GitHub publish.");
-    console.log("Set GH_TOKEN (a GitHub personal access token with 'repo' scope) to enable this step.");
+    console.log("No GH_TOKEN/GITHUB_TOKEN set, and none found in .release-secrets.json — skipping GitHub publish.");
+    console.log("See RELEASE.md for how to set one up (a GitHub personal access token with 'repo' scope).");
     return;
   }
   if (!fs.existsSync(RELEASE_DIR)) {
@@ -115,7 +147,7 @@ async function main() {
   if (!release) {
     release = await createRelease();
   } else {
-    console.log(`Reusing existing draft release ${TAG}...`);
+    console.log(`Reusing existing release ${TAG} (${release.draft ? "draft" : "published"})...`);
   }
 
   const files = fs.readdirSync(RELEASE_DIR).filter((f) => !f.startsWith("."));
@@ -127,8 +159,8 @@ async function main() {
     await uploadAsset(release, path.join(RELEASE_DIR, file));
   }
 
-  console.log(`\nDraft release ready: ${release.html_url}`);
-  console.log("Review it on GitHub and publish when you're ready.");
+  release = await publishRelease(release);
+  console.log(`\nRelease ready: ${release.html_url}`);
 }
 
 main().catch((err) => {

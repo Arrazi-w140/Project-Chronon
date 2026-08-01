@@ -190,15 +190,66 @@
           </div>
         </div>
 
-        <div class="page-panel placeholder-page" data-page-panel="settings" hidden>
-          <span class="placeholder-icon" aria-hidden="true">
-            <svg viewBox="0 0 20 20" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="10" cy="10" r="2.4" />
-              <path d="M10 3.2v1.6M10 15.2v1.6M16.8 10h-1.6M4.8 10H3.2M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1M14.8 14.8l-1.1-1.1M6.3 6.3 5.2 5.2" />
-            </svg>
-          </span>
-          <h2>Settings</h2>
-          <p>App-level preferences will live here.</p>
+        <div class="page-panel" data-page-panel="settings" hidden>
+          <section class="card" data-row="updates">
+            <button class="card-title row-toggle" type="button" aria-expanded="true">
+              <span class="tick"></span>
+              <span>Updates</span>
+            </button>
+
+            <div class="accordion">
+              <div class="accordion-inner" aria-hidden="false">
+                <div class="card-body">
+                  <div class="field">
+                    <label class="switch-row" for="autoCheckUpdates">
+                      <span>Automatically check for updates</span>
+                      <span class="switch">
+                        <input type="checkbox" id="autoCheckUpdates" checked />
+                        <span class="switch-track"><span class="switch-thumb"></span></span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
+
+                  <div class="field">
+                    <label>Status</label>
+                    <div class="update-status-row">
+                      <span class="update-dot" id="updateDot" data-state="idle"></span>
+                      <span class="update-status-text" id="updateStatusText">—</span>
+                    </div>
+                  </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
+
+                  <div class="field-row">
+                    <div class="field">
+                      <label>Current version</label>
+                      <span class="update-meta-value" id="updateCurrentVersion">—</span>
+                    </div>
+                    <div class="field">
+                      <label>Release channel</label>
+                      <select id="updateChannel" class="update-channel-select" disabled title="More channels coming soon">
+                        <option value="stable" selected>Stable</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="row-divider" aria-hidden="true"></div>
+
+                  <div class="update-actions-row">
+                    <button type="button" class="btn btn-secondary" id="updateActionBtn">Check for Updates Now</button>
+                    <span class="update-last-checked" id="updateLastChecked"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="future-settings">
+            <span class="future-settings-dot" aria-hidden="true"></span>
+            <span>More settings coming soon.</span>
+          </div>
         </div>
 
         <div class="page-panel placeholder-page" data-page-panel="about" hidden>
@@ -253,5 +304,6 @@
   <script src="time-formats.js"></script>
   <script src="widget-renderer.js"></script>
   <script src="main.js"></script>
+  <script src="updater.js"></script>
 </body>
 </html>

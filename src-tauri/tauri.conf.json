@@ -33,6 +33,7 @@
     "category": "Utility",
     "shortDescription": "A customizable desktop time & date widget.",
     "longDescription": "Chronon is a lightweight, customizable time and date widget that sits on your Windows desktop, with support for custom fonts, colors, sizing, and layout.",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,6 +51,17 @@
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "languages": ["English"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRFMkIwQkREMEJFRTZCNjcKUldSbmErNEwzUXNyVHNNQjA1ZHdmQnR6NXFMWndONVk2RDRHam9JRzFsejkxMUxoMytGQUNKYkoK",
+      "endpoints": [
+        "https://github.com/Arrazi-w140/Project-Chronon/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }
