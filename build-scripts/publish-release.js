@@ -150,9 +150,30 @@ async function main() {
     console.log(`Reusing existing release ${TAG} (${release.draft ? "draft" : "published"})...`);
   }
 
-  const files = fs.readdirSync(RELEASE_DIR).filter((f) => !f.startsWith("."));
+  // build.js wipes release/ before every build, so in the normal
+  // `npm run release` flow this folder only ever has this version's
+  // files in it. This filter is a second line of defense for the case
+  // where this script gets run on its own against a release/ left
+  // over from something else (an old build, an interrupted run) —
+  // every filename build.js produces embeds the version (e.g.
+  // Chronon-Setup-0.1.2.exe, Chronon_0.1.2_x64-setup.exe.sig) except
+  // latest.json, whose name is fixed but whose content is
+  // version-specific, so it's always kept too.
+  const escapedVersion = pkg.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const versionPattern = new RegExp(escapedVersion);
+  const allFiles = fs.readdirSync(RELEASE_DIR).filter((f) => !f.startsWith("."));
+  const files = allFiles.filter((f) => f === "latest.json" || versionPattern.test(f));
+  const skipped = allFiles.filter((f) => !files.includes(f));
+
+  if (skipped.length) {
+    console.warn(
+      `Skipping ${skipped.length} file(s) in ${RELEASE_DIR} that don't match version ${pkg.version}: ` +
+        `${skipped.join(", ")}`
+    );
+    console.warn(`These look like leftovers from another build — run "npm run build" again before publishing.`);
+  }
   if (!files.length) {
-    throw new Error(`${RELEASE_DIR} is empty — nothing to upload.`);
+    throw new Error(`${RELEASE_DIR} has no files matching version ${pkg.version} — nothing to upload.`);
   }
 
   for (const file of files) {

@@ -50,6 +50,17 @@ const OWNER = "Arrazi-w140";
 const REPO = "Project-Chronon";
 
 console.log(`Building Chronon v${pkg.version} (Windows NSIS installer)...`);
+
+// `release/` is a staging area for THIS build's output only (see
+// .gitignore: "the source of truth is src-tauri/target/release/bundle/,
+// this is just the friendly-named copy"), never a cache. Wipe it before
+// every build so nothing from a previous version (or a previous
+// interrupted run) can survive into this one — publish-release.js later
+// uploads every file it finds in here, so anything stale left behind
+// would get uploaded as if it belonged to this release.
+fs.rmSync(RELEASE_DIR, { recursive: true, force: true });
+fs.mkdirSync(RELEASE_DIR, { recursive: true });
+
 loadSigningKey();
 execSync("npx tauri build --bundles nsis", { stdio: "inherit", cwd: ROOT });
 
@@ -60,12 +71,37 @@ if (!fs.existsSync(NSIS_BUNDLE_DIR)) {
   );
 }
 
-const installer = fs.readdirSync(NSIS_BUNDLE_DIR).find((f) => f.endsWith("-setup.exe"));
-if (!installer) {
-  throw new Error(`No installer .exe found in ${NSIS_BUNDLE_DIR}`);
-}
+// Tauri/Cargo never clean out src-tauri/target/release/bundle/nsis
+// between builds (that's their call, not ours — the folder doubles as
+// part of the incremental build cache), so it can easily hold
+// installers from several past versions side by side. Matching on
+// "-setup.exe" alone — which is what this used to do — just grabs
+// whichever file happens to come back first from readdirSync, with no
+// guarantee that's the one we just built; that's how a stale prior
+// version's installer/.sig got picked up and shipped before. Require
+// the exact current package.json version in the filename instead, so a
+// leftover from an old build can never be selected here.
+const escapedVersion = pkg.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const installerPattern = new RegExp(`_${escapedVersion}_.*-setup\\.exe$`);
+const installerCandidates = fs.readdirSync(NSIS_BUNDLE_DIR).filter((f) => installerPattern.test(f));
 
-fs.mkdirSync(RELEASE_DIR, { recursive: true });
+if (installerCandidates.length === 0) {
+  const found = fs.readdirSync(NSIS_BUNDLE_DIR).join(", ") || "(nothing)";
+  throw new Error(
+    `No installer for version ${pkg.version} found in ${NSIS_BUNDLE_DIR}. ` +
+      `Files present: ${found}. Check the tauri build output above for bundler errors, ` +
+      "or confirm package.json's version matches what was just built."
+  );
+}
+if (installerCandidates.length > 1) {
+  throw new Error(
+    `Found more than one installer matching version ${pkg.version} in ${NSIS_BUNDLE_DIR}: ` +
+      `${installerCandidates.join(", ")}. Not sure which one to trust — clear out that folder ` +
+      "(or run a clean build) and try again."
+  );
+}
+const installer = installerCandidates[0];
+
 const destPath = path.join(RELEASE_DIR, FRIENDLY_NAME);
 fs.copyFileSync(path.join(NSIS_BUNDLE_DIR, installer), destPath);
 
