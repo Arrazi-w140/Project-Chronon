@@ -2,7 +2,7 @@ mod font_library;
 mod widget_window;   // 
 mod updater;   // GitHub-release auto-update (background check + Settings > Updates commands)
 #[cfg(target_os = "windows")]
-mod desktop_layer;   // WorkerW reparenting so the widget sits behind desktop icons (Windows only)
+mod desktop_layer;   // WorkerW reparenting + Show Desktop immunity, so the widget sits behind desktop icons and stays put through Win+D / three-finger swipe (Windows only)
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]

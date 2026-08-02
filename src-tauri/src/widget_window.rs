@@ -151,10 +151,16 @@ pub async fn push_widget(
 
     // Windows only: reparent into the desktop's WorkerW layer so the widget
     // sits *behind* the desktop icons instead of merely behind other app
-    // windows. See desktop_layer.rs for the full explanation and its
-    // (soft) failure modes.
+    // windows, and subclass it so the shell's "Show Desktop" gesture (the
+    // taskbar corner, Win+D, and the three-finger swipe on a touchpad all
+    // trigger it) can't minimize it away like a normal window. See
+    // desktop_layer.rs for the full explanation and both mechanisms' (soft)
+    // failure modes.
     #[cfg(target_os = "windows")]
-    desktop_layer::attach(&widget_window);
+    {
+        desktop_layer::attach(&widget_window);
+        desktop_layer::guard_against_show_desktop(&widget_window);
+    }
 
     // Defensive: if the widget window is ever destroyed by something other
     // than the Delete button (a future close affordance, etc.), let the
@@ -276,7 +282,8 @@ pub fn is_widget_active(app: AppHandle) -> bool {
 // an unused command would just be dead code today.
 
 // ---------------------------------------------------------------------
-// NOTE on "sits above the wallpaper, below the icons, below every app"
+// NOTE on "sits above the wallpaper, below the icons, below every app" —
+// and stays there even when "Show Desktop" fires
 // ---------------------------------------------------------------------
 // The widget is never `always_on_top`. On Windows, `desktop_layer::attach`
 // (called right after window creation, above) reparents it into the same
@@ -286,11 +293,24 @@ pub fn is_widget_active(app: AppHandle) -> bool {
 // fragility (undocumented Explorer behavior; an Explorer restart can
 // strand the widget until the app is relaunched).
 //
+// That reparenting only controls *where* the widget renders, not whether
+// the shell can still minimize it — "Show Desktop" (taskbar corner, Win+D,
+// three-finger touchpad swipe) minimizes windows by sending them
+// SC_MINIMIZE directly, which a WorkerW child is just as able to receive
+// as any other window. `desktop_layer::guard_against_show_desktop` (called
+// right after `attach`, above) is what actually makes the widget immune to
+// that: it subclasses the widget's window procedure to swallow SC_MINIMIZE,
+// so the widget never enters the minimized state that "Show Desktop"
+// toggles in the first place, and therefore has nothing for the matching
+// swipe-up/restore to undo either.
+//
 // On macOS and Linux there's no equivalent public concept of "the WorkerW
 // behind the icons" to reparent into, so those platforms fall back to
 // Tauri's cross-platform `always_on_bottom(true)`: the widget stays below
 // other app windows, but isn't guaranteed to sit behind desktop icons
-// specifically. Genuinely correct per-platform layering there (an NSWindow
-// level on macOS between the desktop and Finder's icon layer; a
+// specifically, and isn't guarded against those platforms' own "show
+// desktop" gestures. Genuinely correct per-platform behavior there (an
+// NSWindow level on macOS between the desktop and Finder's icon layer plus
+// opting out of Mission Control's "show desktop" pass; a
 // `_NET_WM_STATE_BELOW`-style approach on Linux, which itself varies by
 // desktop environment) is a reasonable follow-up but out of scope here.
