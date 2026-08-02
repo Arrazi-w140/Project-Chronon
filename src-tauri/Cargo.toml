@@ -26,10 +26,23 @@ rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Only pulled in on Windows: used by desktop_layer.rs to reparent the
-# widget into the WorkerW layer behind the desktop icons. The same
-# `windows` crate version tauri/wry already depend on internally, so this
-# doesn't add a second copy to the dependency graph.
+# Only pulled in on Windows: used by desktop_layer.rs for the Rainmeter-
+# style Show-Desktop defense (WS_EX_TOOLWINDOW / DWMWA_EXCLUDED_FROM_PEEK
+# plus the SetWinEventHook + polling-timer z-order guard -- see that
+# file's module doc comment). The same `windows` crate version tauri/wry
+# already depend on internally, so this doesn't add a second copy to the
+# dependency graph.
+#   - Win32_UI_Accessibility: SetWinEventHook / UnhookWinEvent
+#   - Win32_Graphics_Dwm: DwmSetWindowAttribute (DWMWA_EXCLUDED_FROM_PEEK)
+#   - Win32_System_LibraryLoader: GetModuleHandleW, for registering the
+#     hidden helper window's WNDCLASSW
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug"] }
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Accessibility",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+] }
 

@@ -141,14 +141,13 @@ pub async fn push_widget(
         .resizable(true)        // resizable now, per the spec's "design for it" note
         .focused(false)         // never steals keyboard focus on creation
         .visible(false)         // IMPORTANT: stays hidden until the Windows-only
-                                 // block below finishes reparenting it into
-                                 // WorkerW. If the window is shown even briefly
-                                 // as a normal top-level window first, Explorer's
-                                 // shell hooks can register it for Show-Desktop
-                                 // tracking before we ever get a chance to
-                                 // reparent it — see desktop_layer.rs's module
-                                 // doc comment for why that's very likely part of
-                                 // why the previous fix didn't hold.
+                                 // block below has applied WS_EX_TOOLWINDOW /
+                                 // DWMWA_EXCLUDED_FROM_PEEK and done the initial
+                                 // z-order pin. If the window were shown even
+                                 // briefly without those in place first, it would
+                                 // exist momentarily as a completely ordinary
+                                 // top-level window — see desktop_layer.rs's
+                                 // module doc comment.
         .build()
         .map_err(|e| {
             let msg = format!("Failed to create widget window: {e}");
@@ -157,29 +156,26 @@ pub async fn push_widget(
         })?;
     println!("[PushToDesktop] Rust: widget window created successfully (hidden)");
 
-    // Windows only: reparent into the desktop's WorkerW layer so the widget
-    // sits *behind* the desktop icons instead of merely behind other app
-    // windows, and is structurally a child window rather than a top-level
-    // one — which is what actually makes it immune to "Show Desktop" (the
-    // taskbar corner, Win+D, and the three-finger swipe on a touchpad all
-    // trigger it). Both this and the message logger below run BEFORE the
-    // window is ever shown. See desktop_layer.rs for the full explanation,
-    // including why the previous SC_MINIMIZE-blocking approach didn't work
-    // and has been removed.
+    // Windows only: apply the Rainmeter-equivalent desktop-layer defense
+    // — WS_EX_TOOLWINDOW + DWMWA_EXCLUDED_FROM_PEEK, an initial z-order
+    // pin directly behind the desktop icons, and the active
+    // SetWinEventHook(EVENT_SYSTEM_FOREGROUND) + polling-timer guard that
+    // keeps re-asserting that z-order (this is what actually survives
+    // Show Desktop — see desktop_layer.rs's module doc comment for why a
+    // one-time placement, structural or otherwise, cannot). Runs BEFORE
+    // the window is ever shown, same as before, so Explorer's shell hooks
+    // never get a chance to register it as an independent top-level
+    // window before the exclusions are in place.
     #[cfg(target_os = "windows")]
     {
-        let attached = desktop_layer::attach(&widget_window);
-        if !attached {
+        let installed = desktop_layer::install(&widget_window);
+        if !installed {
             eprintln!(
-                "[PushToDesktop] Rust: WorkerW attach did not stick — widget will behave as a normal (always-on-bottom) window, not a true desktop layer"
+                "[PushToDesktop] Rust: desktop-layer install did not fully succeed — see the \
+                 [Chronon/DesktopLayer] log lines above for which step failed. The widget will \
+                 still show, but may not have full Show-Desktop/Alt-Tab/Task-View immunity."
             );
         }
-        // Temporary diagnostics: logs the messages the widget actually
-        // receives (see desktop_layer.rs) so real Show Desktop behavior
-        // can be confirmed from the field instead of guessed at. Installed
-        // regardless of whether `attach` succeeded, since seeing what
-        // happens in both cases is the point.
-        desktop_layer::install_message_logger(&widget_window);
     }
 
     if let Err(e) = widget_window.show() {
@@ -194,6 +190,15 @@ pub async fn push_widget(
     widget_window.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
             println!("[PushToDesktop] Rust: widget window destroyed, notifying editor");
+            // Unhook the WinEventHook, kill the polling timer, and destroy
+            // the helper window (see desktop_layer.rs). Without this, a
+            // second push_widget() later in the same process would
+            // install a second hook/timer on top of one still pointing at
+            // a dead HWND.
+            #[cfg(target_os = "windows")]
+            {
+                desktop_layer::uninstall();
+            }
             if let Some(main) = app_for_event.get_webview_window(MAIN_LABEL) {
                 let _ = main.emit(CLOSED_EVENT, ());
             }
@@ -310,32 +315,42 @@ pub fn is_widget_active(app: AppHandle) -> bool {
 // NOTE on "sits above the wallpaper, below the icons, below every app" —
 // and stays there even when "Show Desktop" fires
 // ---------------------------------------------------------------------
-// The widget is never `always_on_top`. On Windows, `desktop_layer::attach`
-// (called right after window creation, above, while the window is still
-// hidden) reparents it into the same "WorkerW" layer Rainmeter/Wallpaper
-// Engine use, which produces the requested stacking: wallpaper < widget <
-// desktop icons < every normal app window. See desktop_layer.rs for the
-// mechanics and its known fragility (undocumented Explorer behavior; an
-// Explorer restart can strand the widget until the app is relaunched).
+// The widget is never `always_on_top`, and — as of this version — is
+// never reparented (no SetParent call anywhere in desktop_layer.rs). It
+// stays a genuine, unparented, top-level window, exactly like every
+// Rainmeter skin (confirmed by reading Rainmeter's own Skin::Initialize()
+// in Library/Skin.cpp: CreateWindowEx with a null hWndParent).
 //
-// Immunity to "Show Desktop" (taskbar corner, Win+D, three-finger touchpad
-// swipe) is a *consequence* of that reparenting being done correctly, not
-// a separate mechanism layered on top of it. A previous version of this
-// file additionally subclassed the widget to swallow WM_SYSCOMMAND/
-// SC_MINIMIZE, on the assumption that's how Show Desktop minimizes
-// windows — it isn't. Show Desktop minimizes windows by calling
-// ShowWindow()/SetWindowPlacement() on their HWNDs directly from outside
-// the process, which never generates a WM_SYSCOMMAND at all, so that guard
-// was intercepting a message that was never being sent in this scenario.
-// It's been removed. What actually matters is that `attach` now (a) fixes
-// up the WS_CHILD/WS_POPUP style bits that `SetParent` alone doesn't touch
-// — MSDN calls this out explicitly — so the widget is a genuine child
-// window and not merely reparented-while-still-styled-as-a-popup, and (b)
-// runs before the window is ever shown, so Explorer's shell hooks never
-// get a chance to register it as an independent top-level window in the
-// first place. See desktop_layer.rs's module doc comment for the full
-// reasoning, plus a temporary message logger to confirm this from the
-// field.
+// Three independent, documented mechanisms — matching Rainmeter's own
+// architecture — combine to produce the requested stacking and Show-
+// Desktop immunity; see desktop_layer.rs's module doc comment for the
+// full reasoning, source citations, and the Windows documentation each
+// step relies on:
+//   1. WS_EX_TOOLWINDOW (Alt+Tab / Task View / taskbar exclusion) and
+//      DWMWA_EXCLUDED_FROM_PEEK (Aero Peek preview exclusion) applied
+//      directly to the widget's own HWND.
+//   2. An initial SetWindowPos placing the widget directly behind the
+//      desktop's icon layer in z-order (above the wallpaper, below the
+//      icons, and — since it's never WS_EX_TOPMOST — below every normal
+//      app window).
+//   3. A SetWinEventHook(EVENT_SYSTEM_FOREGROUND, ...) plus a 250ms
+//      polling timer that continuously re-applies that z-order any time
+//      it's disturbed — including by Show Desktop. This active,
+//      self-healing defense is not optional set-dressing: Rainmeter's
+//      own maintainer has stated directly (rainmeter/rainmeter#339) that
+//      no static window flag or one-time placement survives Show
+//      Desktop, and Rainmeter's source confirms this is exactly how it
+//      handles it.
+//
+// A previous version of this file reparented the widget into the
+// desktop's WorkerW via SetParent, on the theory that this is what makes
+// Rainmeter immune to Show Desktop. It isn't: Rainmeter's skins are never
+// SetParent-ed anywhere. That approach also carried real fragility risk
+// (a WS_CHILD window's on-screen visibility depends on every ancestor
+// also being visible — see IsWindowVisible's documented ancestor-chain
+// rule — so an Explorer-driven change to the WorkerW the widget was
+// parented into could hide or strand it without the widget's own WndProc
+// ever being notified). See desktop_layer.rs for the full comparison.
 //
 // On macOS and Linux there's no equivalent public concept of "the WorkerW
 // behind the icons" to reparent into, so those platforms fall back to
