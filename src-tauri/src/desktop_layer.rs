@@ -203,12 +203,13 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_EXCLUDED_FROM_PEEK};
 use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::Sleep;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, EVENT_SYSTEM_FOREGROUND, FindWindowExW,
-    FindWindowW, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_BOTTOM,
-    HWND_MESSAGE, KillTimer, PostQuitMessage, RegisterClassW, SWP_FRAMECHANGED, SWP_HIDEWINDOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW,
+    FindWindowW, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GetShellWindow, GetWindowLongPtrW,
+    HWND_BOTTOM, HWND_MESSAGE, KillTimer, PostQuitMessage, RegisterClassW, SWP_FRAMECHANGED,
+    SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_SHOWWINDOW,
     SetTimer, SetWindowLongPtrW, SetWindowPos, WINDOWPOS, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT,
     WINEVENT_SKIPOWNPROCESS, WM_ACTIVATE, WM_ACTIVATEAPP, WM_COMMAND, WM_DESTROY,
     WM_DISPLAYCHANGE, WM_MOVE, WM_NCACTIVATE, WM_PARENTNOTIFY, WM_SHOWWINDOW, WM_SIZE,
@@ -371,6 +372,19 @@ static HELPER_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// The active WinEventHook, so it can be unhooked on teardown.
 static WIN_EVENT_HOOK: AtomicIsize = AtomicIsize::new(0);
+
+/// Counts every WM_TIMER tick the helper window's WndProc actually
+/// receives, independent of whether pin_to_desktop_layer / set_tool_window_style
+/// found anything to correct. See the module doc comment's "guard liveness"
+/// note: enforce_desktop_layer's own logging is either unconditional-but-was-
+/// only-observed-once (pin_to_desktop_layer) or conditional-on-drift
+/// (set_tool_window_style), so neither one, by itself, distinguishes "the
+/// guard stopped ticking" from "the guard is ticking and finding nothing to
+/// fix." This counter is logged on a much coarser cadence (every 20th tick,
+/// i.e. ~5s at the current 250ms interval) purely so that gap is visible: if
+/// this line stops appearing, dispatch to the helper window's WndProc has
+/// stopped, which is a different bug from anything Show-Desktop-specific.
+static GUARD_TICKS: AtomicIsize = AtomicIsize::new(0);
 
 // ---------------------------------------------------------------------
 // Desktop-icons-host lookup (z-order reference point only -- never a
@@ -679,6 +693,113 @@ fn enforce_desktop_layer(hwnd: HWND, context: &str) {
     pin_to_desktop_layer(hwnd);
 }
 
+// =====================================================================
+// ROOT CAUSE of the Win+D-specific disappearance (see the investigation
+// that added this section -- rainmeter/rainmeter#377, fixed upstream in
+// commit b1128fb "Fix 'Show Desktop' hiding skins on Windows 11 24H2"):
+// =====================================================================
+// This is a genuine Windows 11 24H2 platform change, not a bug specific
+// to this codebase -- Rainmeter itself was hit by the identical symptom
+// (skins vanish on Win+D / the taskbar corner Show Desktop button, with
+// no window message of any kind, every current Windows 11 24H2 build,
+// every Rainmeter version before 4.5.22 / April 11 2025), tracked for
+// about ten months as rainmeter/rainmeter#377. Rainmeter's own lead
+// maintainer (brianferguson) confirmed directly on that issue that there
+// is no documented API, flag, or window style that opts a window out of
+// being hidden while Show Desktop is engaged -- Windows performs the
+// hide (and, separately, the eventual restore) itself, and third-party
+// windows cannot decline. That matches this file's own instrumentation
+// exactly: the message logger installed by install_message_logger sees
+// nothing (no WM_SHOWWINDOW, no WM_WINDOWPOSCHANGING/CHANGED, nothing)
+// during Win+D, because the hide is not implemented as any operation
+// performed *on* the widget's own HWND that would generate a message to
+// it.
+//
+// What actually is fixable -- and what commit b1128fb changed in
+// Library/System.cpp -- is CORRECTLY DETECTING the exact instant Show
+// Desktop engages, so the z-order defense this file already has (the
+// EVENT_SYSTEM_FOREGROUND hook + polling timer, both calling
+// enforce_desktop_layer/pin_to_desktop_layer) reasserts the widget's
+// z-order at a moment that actually sticks, instead of racing Explorer's
+// own in-flight hide/restore sequence and losing. Two concrete things
+// changed there:
+//   1. Which window becoming EVENT_SYSTEM_FOREGROUND counts as "Show
+//      Desktop just engaged". Pre-24H2, Rainmeter watched for a freshly
+//      created WorkerW (owned by Explorer's process) becoming
+//      foreground. On 24H2, Explorer stopped creating that particular
+//      WorkerW the same way, so that signal simply stopped firing --
+//      Rainmeter's detection logic didn't break, it went silent. The fix
+//      retargets the check to the desktop SHELL window itself
+//      (GetShellWindow() / GetDefaultShellWindow(), i.e. Progman on both
+//      layouts) becoming foreground, which is the layout-independent
+//      signal: pressing Win+D always hands the foreground to the
+//      desktop, on every Windows version.
+//   2. A short retry/settle window (Rainmeter: up to 5 attempts, 2ms
+//      apart) before trusting a z-order check made at that exact
+//      instant, because the desktop window hierarchy has not
+//      necessarily finished settling by the time the FOREGROUND event's
+//      callback runs -- a single immediate check/re-pin can race
+//      Explorer's own in-flight operation and lose, which reads
+//      identically to "nothing happened" from the outside.
+//
+// is_shell_window/settle_and_repin below are this file's version of
+// both: is_shell_window replaces the old (never-present in this file, so
+// nothing to remove) WorkerW-class-name check with the same
+// version-independent "is the desktop itself becoming foreground" test
+// Rainmeter now uses, and settle_and_repin replaces a single
+// enforce_desktop_layer call with several spaced out over ~20ms, which
+// is this file's equivalent of Rainmeter's retry-until-stable CheckDesktopState
+// loop (Chronon has no per-skin state machine to re-check the way
+// Rainmeter's CheckDesktopState does, so it substitutes "try several
+// times over the window where the race can happen" for "poll until the
+// specific condition that indicates the race is over").
+//
+// IMPORTANT CAVEAT, stated plainly rather than glossed over: per
+// brianferguson's own comments on #377, this does not, and cannot,
+// prevent Windows from hiding the widget for the (usually sub-100ms)
+// duration Show Desktop is actually engaged -- there is no supported way
+// to do that. What this fixes is the widget staying hidden or coming
+// back in the wrong z-order position after Show Desktop is toggled back
+// off, which is what the reported symptom actually is (permanently
+// hidden until some other foreground change happens to fix it as a
+// side effect, rather than a correct, prompt restore).
+// =====================================================================
+
+/// True if `hwnd` is the desktop's shell window (normally Progman) -- the
+/// same handle Rainmeter's GetDefaultShellWindow()/GetShellWindow() call
+/// resolves to. EVENT_SYSTEM_FOREGROUND firing with this HWND is the
+/// actual, layout-independent signal that Show Desktop just engaged; see
+/// the ROOT CAUSE section above.
+fn is_shell_window(hwnd: HWND) -> bool {
+    unsafe {
+        let shell = GetShellWindow();
+        !shell.0.is_null() && shell.0 == hwnd.0
+    }
+}
+
+/// Re-pins the widget several times over a short window instead of once.
+/// Used specifically for the moment Show Desktop engages (see
+/// win_event_proc below), where a single immediate re-pin can race
+/// Explorer's own in-flight hide operation and silently lose -- see the
+/// ROOT CAUSE section above. Deliberately more aggressive (6 attempts,
+/// 4ms apart, ~20ms total) than Rainmeter's 5x2ms, since this file is
+/// polling a structural z-order lookup (find_desktop_icon_host) on every
+/// attempt rather than a cheap cached-state check.
+fn settle_and_repin(hwnd: HWND, context: &str) {
+    const ATTEMPTS: u32 = 6;
+    const SPACING_MS: u32 = 4;
+    for attempt in 1..=ATTEMPTS {
+        enforce_desktop_layer(hwnd, context);
+        if attempt < ATTEMPTS {
+            unsafe { Sleep(SPACING_MS) };
+        }
+    }
+    log(&format!(
+        "{context}: settle_and_repin finished ({ATTEMPTS} attempts over ~{}ms)",
+        ATTEMPTS * SPACING_MS
+    ));
+}
+
 /// The helper window's WndProc. This window's only jobs are to own the
 /// WM_TIMER that drives the polling half of the z-order defense and to
 /// give the WinEventHook callback (below) a place to log from; it is
@@ -693,6 +814,15 @@ unsafe extern "system" fn helper_wndproc(
 ) -> LRESULT {
     match msg {
         WM_TIMER if wparam.0 == GUARD_TIMER_ID => {
+            let ticks = GUARD_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+            if ticks % 20 == 0 {
+                log(&format!(
+                    "guard heartbeat: {ticks} ticks delivered so far ({}s @ {GUARD_TIMER_INTERVAL_MS}ms) \
+                     -- if this line stops appearing, WM_TIMER has stopped reaching \
+                     helper_wndproc (a message-pump problem, not a Show-Desktop problem)",
+                    ticks as u64 * GUARD_TIMER_INTERVAL_MS as u64 / 1000
+                ));
+            }
             let widget: HWND = load_handle(&WIDGET_HWND);
             if !widget.0.is_null() {
                 enforce_desktop_layer(widget, "timer");
@@ -720,7 +850,7 @@ unsafe extern "system" fn helper_wndproc(
 unsafe extern "system" fn win_event_proc(
     _hook: HWINEVENTHOOK,
     event: u32,
-    _hwnd: HWND,
+    hwnd: HWND,
     _id_object: i32,
     _id_child: i32,
     _thread: u32,
@@ -733,8 +863,20 @@ unsafe extern "system" fn win_event_proc(
     if widget.0.is_null() {
         return;
     }
-    log("EVENT_SYSTEM_FOREGROUND observed -> re-pinning widget");
-    enforce_desktop_layer(widget, "foreground-hook");
+
+    if is_shell_window(hwnd) {
+        // The desktop itself just became the foreground window -- this is
+        // the actual Show-Desktop-engage signal (see the ROOT CAUSE
+        // section above is_shell_window). A single immediate re-pin here
+        // can race Explorer's own in-flight hide operation and lose, so
+        // settle_and_repin spreads several attempts over ~20ms instead.
+        log("EVENT_SYSTEM_FOREGROUND observed, foreground=shell window -- \
+             this is the Show-Desktop-engage signal, settle-and-repinning");
+        settle_and_repin(widget, "show-desktop-engage");
+    } else {
+        log("EVENT_SYSTEM_FOREGROUND observed -> re-pinning widget");
+        enforce_desktop_layer(widget, "foreground-hook");
+    }
 }
 
 /// Creates the hidden helper window and installs the WinEventHook and
