@@ -183,6 +183,29 @@ pub async fn push_widget(
     }
     println!("[PushToDesktop] Rust: widget window shown");
 
+    // ROOT CAUSE FIX: `.show()` is exactly the tao call that flips
+    // `WindowFlags::VISIBLE`, which is enough of a flag diff for tao's
+    // `WindowFlags::apply_diff` to recompute and reapply this window's
+    // entire GWL_STYLE/GWL_EXSTYLE pair from tao's own cached flags --
+    // which still believe `ON_TASKBAR = true` (tao hardcodes that for
+    // every parentless top-level window at creation and exposes no API
+    // to clear it), silently restoring WS_EX_APPWINDOW and erasing the
+    // WS_EX_TOOLWINDOW that desktop_layer::install() just set. See the
+    // "ROOT CAUSE" comment block in desktop_layer.rs (above
+    // set_tool_window_style) for the full trace through tao's source.
+    // This must run immediately after .show(), not rely on the guard
+    // timer's next tick, so the window is never left APPWINDOW-styled
+    // for even one 250ms polling interval.
+    #[cfg(target_os = "windows")]
+    {
+        if !desktop_layer::reassert_after_show(&widget_window) {
+            eprintln!(
+                "[PushToDesktop] Rust: post-show WS_EX_TOOLWINDOW reassertion failed -- see \
+                 the [Chronon/DesktopLayer] log lines above for details."
+            );
+        }
+    }
+
     // Defensive: if the widget window is ever destroyed by something other
     // than the Delete button (a future close affordance, etc.), let the
     // editor know so its UI doesn't stay stuck thinking a widget is active.

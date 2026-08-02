@@ -454,34 +454,114 @@ fn find_desktop_icon_host() -> Option<HWND> {
 // Part 1: static shell exclusions (Alt+Tab / Task View / taskbar / peek)
 // ---------------------------------------------------------------------
 
-/// Sets WS_EX_TOOLWINDOW (clearing WS_EX_APPWINDOW if present) and
-/// DWMWA_EXCLUDED_FROM_PEEK on the widget's own HWND. Both are the exact
-/// mechanisms Rainmeter uses for every skin (CreateWindowEx's
-/// WS_EX_TOOLWINDOW flag and Skin::IgnoreAeroPeek()'s DwmSetWindowAttribute
-/// call, both in Library/Skin.cpp) -- see the module doc comment for the
-/// documentation citations. Neither of these makes the widget immune to
-/// Show Desktop by itself (see install()); they only cover taskbar /
-/// Alt+Tab / Task View / Aero-Peek-preview exclusion.
-///
-/// Must run before the window is first shown so it is never, even
-/// momentarily, visible without these styles -- widget_window.rs builds
-/// the window with `.visible(false)` and calls this before `.show()`.
-fn apply_shell_exclusions(hwnd: HWND) -> bool {
+// =====================================================================
+// ROOT CAUSE of the "TOOLWINDOW reverts to APPWINDOW ~10ms after
+// install()" bug (see the investigation that replaced this section):
+// =====================================================================
+// tao (the windowing crate under Tauri) keeps its OWN cached copy of
+// this window's style bits in `WindowState.window_flags`
+// (tao-0.35.3/src/platform_impl/windows/window_state.rs). For any
+// window created with no parent -- which every top-level Tauri window
+// is, including this widget -- tao unconditionally sets
+// `WindowFlags::ON_TASKBAR = true` on that cached copy at creation time
+// and never offers a public API to clear it:
+//
+//   Parent::None => {
+//       window_flags.set(WindowFlags::ON_TASKBAR, true);
+//       None
+//   }
+//   -- tao-0.35.3/src/platform_impl/windows/window.rs:1163-1166
+//
+// `WindowFlags::ON_TASKBAR` is exactly what maps to `WS_EX_APPWINDOW`:
+//
+//   if self.contains(WindowFlags::ON_TASKBAR) {
+//       style_ex |= WS_EX_APPWINDOW;
+//   }
+//   -- tao-0.35.3/src/platform_impl/windows/window_state.rs:258-260
+//
+// `set_tool_window_style()` below fixes the REAL HWND's GWL_EXSTYLE
+// directly with SetWindowLongPtrW, bypassing tao entirely -- there is no
+// other way to get WS_EX_TOOLWINDOW, since neither Tauri's builder nor
+// tao's WindowBuilderExtWindows exposes it, and `.skip_taskbar(true)`
+// only calls `ITaskbarList::DeleteTab` (a COM taskbar-button removal),
+// never touching GWL_EXSTYLE (confirmed by reading `set_skip_taskbar` in
+// tao-0.35.3/src/platform_impl/windows/window.rs:1529-1539). But because
+// the patch bypasses tao, tao's cached `window_flags` never learns about
+// it -- it still believes `ON_TASKBAR = true`, forever.
+//
+// The very next time ANY tao/Tauri call changes ANY window flag --
+// `.show()`, `.hide()`, `set_resizable()`, `set_always_on_top()`,
+// `set_decorations()`, `set_minimized()`, etc. -- tao's
+// `WindowFlags::apply_diff()` recomputes the ENTIRE style/ex-style pair
+// from that stale cached snapshot and reapplies both wholesale:
+//
+//   if diff != WindowFlags::empty() {
+//       let (style, style_ex) = new.to_window_styles();
+//       ...
+//       SetWindowLongW(window, GWL_STYLE, style.0 as i32);
+//       SetWindowLongW(window, GWL_EXSTYLE, style_ex.0 as i32);
+//   -- tao-0.35.3/src/platform_impl/windows/window_state.rs:426-441
+//
+// -- silently restoring WS_EX_APPWINDOW and erasing whatever this file
+// set. In the current code, the one call in the creation path that does
+// this is `widget_window.show()` in push_widget() (it flips
+// `WindowFlags::VISIBLE` from false to true, which is enough of a diff
+// to trigger the wholesale recompute above) -- that is the exact
+// mechanism behind the GWL_EXSTYLE WM_STYLECHANGING/CHANGED pair
+// observed ~10ms after install() in every captured log.
+//
+// tao's cached `window_flags` is private to tao/wry and unreachable
+// through any Tauri API, so it cannot be corrected once and left alone
+// -- there is no way to make tao itself stop believing ON_TASKBAR=true.
+// The correct fix is therefore to treat "something reset GWL_EXSTYLE"
+// as a standing, recurring condition rather than a one-time event, and
+// to heal it every time it can occur:
+//   1. Reassert immediately after the one call in push_widget() known to
+//      trigger it (`reassert_after_show()`, called right after
+//      `.show()` -- see widget_window.rs).
+//   2. Fold the same check into the z-order guard's existing polling
+//      timer and WinEventHook (see `enforce_desktop_layer()` below), so
+//      that any *other*, currently-nonexistent-but-possible future call
+//      that disturbs a tao window flag (set_resizable, set_always_on_top,
+//      etc.) gets corrected within one guard tick (250ms), the same way
+//      the z-order itself already self-heals. `set_tool_window_style()`
+//      is a cheap no-op read-only check when nothing has drifted, so
+//      folding it into the existing per-tick guard costs one extra
+//      GetWindowLongPtrW call per tick, not a second timer.
+// =====================================================================
+
+/// Ensures the widget's HWND has WS_EX_TOOLWINDOW set and WS_EX_APPWINDOW
+/// cleared, correcting it if something (see the ROOT CAUSE comment above
+/// this function) reset it. Idempotent and silent when nothing has
+/// drifted -- it only logs when it actually detects and corrects a
+/// mismatch, both so the steady-state guard tick doesn't spam the log
+/// and so a real correction is unmistakable when read back.
+fn set_tool_window_style(hwnd: HWND, context: &str) -> bool {
     unsafe {
         let previous = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let corrected = (previous | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+
+        if corrected == previous {
+            return true; // already correct -- nothing to do, nothing to log
+        }
+
         log(&format!(
-            "GWL_EXSTYLE before exclusions: 0x{previous:08X}{}",
+            "[{context}] GWL_EXSTYLE drifted back to 0x{previous:08X}{} -- reapplying \
+             WS_EX_TOOLWINDOW / clearing WS_EX_APPWINDOW. This is expected the first time \
+             it fires right after .show() (see the ROOT CAUSE comment above \
+             set_tool_window_style: tao's WindowFlags::apply_diff() unconditionally \
+             recomputes GWL_EXSTYLE from its own cached flags, which hardcode \
+             ON_TASKBAR=true for this window and expose no API to clear it). If this \
+             fires repeatedly during normal use rather than once, something new is \
+             calling a tao window-flag API on this window.",
             decode_exstyle_bits(previous)
         ));
 
-        let corrected = (previous | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, corrected as isize);
 
         // Per MSDN (SetWindowLongPtr remarks): some window data is
         // cached and changes are not reflected until SetWindowPos is
-        // called with SWP_FRAMECHANGED. This applies to GWL_EXSTYLE the
-        // same way the previous version of this file already correctly
-        // applied it to GWL_STYLE.
+        // called with SWP_FRAMECHANGED.
         let pos_ok = SetWindowPos(
             hwnd,
             None,
@@ -497,11 +577,23 @@ fn apply_shell_exclusions(hwnd: HWND) -> bool {
 
         let after = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
         log(&format!(
-            "GWL_EXSTYLE after exclusions:  0x{after:08X}{} (SetWindowPos/FRAMECHANGED {})",
+            "[{context}] GWL_EXSTYLE corrected: 0x{after:08X}{} (SetWindowPos/FRAMECHANGED {})",
             decode_exstyle_bits(after),
             if pos_ok { "ok" } else { "FAILED" }
         ));
 
+        pos_ok
+    }
+}
+
+/// One-time DWM Aero-Peek exclusion. Unlike GWL_EXSTYLE, DWM window
+/// attributes are not part of tao's cached `WindowFlags` and are never
+/// touched by `apply_diff`, so -- unlike `set_tool_window_style` -- this
+/// does not need to be reasserted on a timer; setting it once at
+/// install() is sufficient and matches Rainmeter's own
+/// Skin::IgnoreAeroPeek(), called once right after CreateWindowEx.
+fn apply_peek_exclusion(hwnd: HWND) -> bool {
+    unsafe {
         let enabled: BOOL = BOOL(1);
         let dwm_result = DwmSetWindowAttribute(
             hwnd,
@@ -517,8 +609,7 @@ fn apply_shell_exclusions(hwnd: HWND) -> bool {
                  not Show Desktop itself)"
             )),
         }
-
-        pos_ok && dwm_result.is_ok()
+        dwm_result.is_ok()
     }
 }
 
@@ -574,6 +665,20 @@ fn pin_to_desktop_layer(hwnd: HWND) -> bool {
     result.is_ok()
 }
 
+/// Combines the two self-healing checks that must run together on every
+/// guard tick / foreground-hook fire: re-assert GWL_EXSTYLE (see the
+/// ROOT CAUSE comment above `set_tool_window_style`; corrects it if some
+/// tao/Tauri call reset it since the last tick) and re-assert z-order
+/// (the original Show-Desktop defense). Both are cheap no-ops when
+/// nothing has drifted, so calling this unconditionally on every timer
+/// tick and every EVENT_SYSTEM_FOREGROUND is the same "always re-pin,
+/// don't bother detecting whether it's needed first" philosophy the
+/// z-order half of this file already uses (see the module doc comment).
+fn enforce_desktop_layer(hwnd: HWND, context: &str) {
+    set_tool_window_style(hwnd, context);
+    pin_to_desktop_layer(hwnd);
+}
+
 /// The helper window's WndProc. This window's only jobs are to own the
 /// WM_TIMER that drives the polling half of the z-order defense and to
 /// give the WinEventHook callback (below) a place to log from; it is
@@ -590,7 +695,7 @@ unsafe extern "system" fn helper_wndproc(
         WM_TIMER if wparam.0 == GUARD_TIMER_ID => {
             let widget: HWND = load_handle(&WIDGET_HWND);
             if !widget.0.is_null() {
-                pin_to_desktop_layer(widget);
+                enforce_desktop_layer(widget, "timer");
             }
             LRESULT(0)
         }
@@ -629,7 +734,7 @@ unsafe extern "system" fn win_event_proc(
         return;
     }
     log("EVENT_SYSTEM_FOREGROUND observed -> re-pinning widget");
-    pin_to_desktop_layer(widget);
+    enforce_desktop_layer(widget, "foreground-hook");
 }
 
 /// Creates the hidden helper window and installs the WinEventHook and
@@ -737,12 +842,17 @@ pub fn uninstall() {
 }
 
 /// Entry point called once, from widget_window.rs, right after the
-/// widget window is built (while it is still hidden -- see the
-/// module doc comment on apply_shell_exclusions). Applies the static
+/// widget window is built (while it is still hidden). Applies the static
 /// shell exclusions, does an initial z-order pin, and installs the
 /// active defense. Returns whether every step succeeded; the caller
 /// logs a warning if not, since the widget still works as a normal
 /// window in that case, just without Rainmeter-equivalent guarantees.
+///
+/// NOTE: this alone is not sufficient -- `widget_window.rs` calls
+/// `.show()` immediately after this returns, and that call reliably
+/// undoes the WS_EX_TOOLWINDOW this function just set (see the ROOT
+/// CAUSE comment above `set_tool_window_style`). `reassert_after_show()`
+/// below is what closes that specific, otherwise-guaranteed gap.
 pub fn install(window: &WebviewWindow) -> bool {
     let hwnd = match window.hwnd() {
         Ok(h) => h,
@@ -755,13 +865,36 @@ pub fn install(window: &WebviewWindow) -> bool {
     log("install() starting -- note: WM_CREATE cannot be logged from here, \
          see the module doc comment for why");
 
-    let exclusions_ok = apply_shell_exclusions(hwnd);
+    let exclusions_ok = set_tool_window_style(hwnd, "install");
+    let peek_ok = apply_peek_exclusion(hwnd);
     let pin_ok = pin_to_desktop_layer(hwnd);
     let guard_ok = install_show_desktop_guard(hwnd);
 
     install_message_logger(window);
 
-    exclusions_ok && pin_ok && guard_ok
+    exclusions_ok && peek_ok && pin_ok && guard_ok
+}
+
+/// Called from widget_window.rs immediately after `widget_window.show()`
+/// returns. This is not optional set-dressing: `.show()` is exactly the
+/// tao call that triggers the GWL_EXSTYLE reset described in the ROOT
+/// CAUSE comment above `set_tool_window_style` (it flips
+/// `WindowFlags::VISIBLE`, which is enough of a diff for tao's
+/// `apply_diff` to recompute and reapply the window's entire style pair
+/// from its own stale cached flags). Calling this right after closes
+/// that gap immediately rather than waiting up to one guard-timer tick
+/// (250ms) for the polling/hook self-heal to catch it.
+pub fn reassert_after_show(window: &WebviewWindow) -> bool {
+    let hwnd = match window.hwnd() {
+        Ok(h) => h,
+        Err(e) => {
+            log(&format!(
+                "couldn't get the widget's HWND for the post-show reassertion: {e}"
+            ));
+            return false;
+        }
+    };
+    set_tool_window_style(hwnd, "post-show")
 }
 
 // ---------------------------------------------------------------------
@@ -906,7 +1039,7 @@ unsafe extern "system" fn logging_wndproc(
                  can mean Explorer recreated the desktop-icons host",
                 wparam.0
             ));
-            pin_to_desktop_layer(hwnd);
+            enforce_desktop_layer(hwnd, "display-change");
         }
         WM_ACTIVATE => {
             let state = match (wparam.0 as u32) & 0xFFFF {
