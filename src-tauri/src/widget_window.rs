@@ -140,27 +140,52 @@ pub async fn push_widget(
         .skip_taskbar(true)     // never appears in the taskbar
         .resizable(true)        // resizable now, per the spec's "design for it" note
         .focused(false)         // never steals keyboard focus on creation
-        .visible(true)
+        .visible(false)         // IMPORTANT: stays hidden until the Windows-only
+                                 // block below finishes reparenting it into
+                                 // WorkerW. If the window is shown even briefly
+                                 // as a normal top-level window first, Explorer's
+                                 // shell hooks can register it for Show-Desktop
+                                 // tracking before we ever get a chance to
+                                 // reparent it — see desktop_layer.rs's module
+                                 // doc comment for why that's very likely part of
+                                 // why the previous fix didn't hold.
         .build()
         .map_err(|e| {
             let msg = format!("Failed to create widget window: {e}");
             eprintln!("[PushToDesktop] Rust: {msg}");
             msg
         })?;
-    println!("[PushToDesktop] Rust: widget window created successfully");
+    println!("[PushToDesktop] Rust: widget window created successfully (hidden)");
 
     // Windows only: reparent into the desktop's WorkerW layer so the widget
     // sits *behind* the desktop icons instead of merely behind other app
-    // windows, and subclass it so the shell's "Show Desktop" gesture (the
+    // windows, and is structurally a child window rather than a top-level
+    // one — which is what actually makes it immune to "Show Desktop" (the
     // taskbar corner, Win+D, and the three-finger swipe on a touchpad all
-    // trigger it) can't minimize it away like a normal window. See
-    // desktop_layer.rs for the full explanation and both mechanisms' (soft)
-    // failure modes.
+    // trigger it). Both this and the message logger below run BEFORE the
+    // window is ever shown. See desktop_layer.rs for the full explanation,
+    // including why the previous SC_MINIMIZE-blocking approach didn't work
+    // and has been removed.
     #[cfg(target_os = "windows")]
     {
-        desktop_layer::attach(&widget_window);
-        desktop_layer::guard_against_show_desktop(&widget_window);
+        let attached = desktop_layer::attach(&widget_window);
+        if !attached {
+            eprintln!(
+                "[PushToDesktop] Rust: WorkerW attach did not stick — widget will behave as a normal (always-on-bottom) window, not a true desktop layer"
+            );
+        }
+        // Temporary diagnostics: logs the messages the widget actually
+        // receives (see desktop_layer.rs) so real Show Desktop behavior
+        // can be confirmed from the field instead of guessed at. Installed
+        // regardless of whether `attach` succeeded, since seeing what
+        // happens in both cases is the point.
+        desktop_layer::install_message_logger(&widget_window);
     }
+
+    if let Err(e) = widget_window.show() {
+        eprintln!("[PushToDesktop] Rust: failed to show widget window: {e}");
+    }
+    println!("[PushToDesktop] Rust: widget window shown");
 
     // Defensive: if the widget window is ever destroyed by something other
     // than the Delete button (a future close affordance, etc.), let the
@@ -286,23 +311,31 @@ pub fn is_widget_active(app: AppHandle) -> bool {
 // and stays there even when "Show Desktop" fires
 // ---------------------------------------------------------------------
 // The widget is never `always_on_top`. On Windows, `desktop_layer::attach`
-// (called right after window creation, above) reparents it into the same
-// "WorkerW" layer Rainmeter/Wallpaper Engine use, which genuinely produces
-// the requested stacking: wallpaper < widget < desktop icons < every
-// normal app window. See desktop_layer.rs for the mechanics and its known
-// fragility (undocumented Explorer behavior; an Explorer restart can
-// strand the widget until the app is relaunched).
+// (called right after window creation, above, while the window is still
+// hidden) reparents it into the same "WorkerW" layer Rainmeter/Wallpaper
+// Engine use, which produces the requested stacking: wallpaper < widget <
+// desktop icons < every normal app window. See desktop_layer.rs for the
+// mechanics and its known fragility (undocumented Explorer behavior; an
+// Explorer restart can strand the widget until the app is relaunched).
 //
-// That reparenting only controls *where* the widget renders, not whether
-// the shell can still minimize it — "Show Desktop" (taskbar corner, Win+D,
-// three-finger touchpad swipe) minimizes windows by sending them
-// SC_MINIMIZE directly, which a WorkerW child is just as able to receive
-// as any other window. `desktop_layer::guard_against_show_desktop` (called
-// right after `attach`, above) is what actually makes the widget immune to
-// that: it subclasses the widget's window procedure to swallow SC_MINIMIZE,
-// so the widget never enters the minimized state that "Show Desktop"
-// toggles in the first place, and therefore has nothing for the matching
-// swipe-up/restore to undo either.
+// Immunity to "Show Desktop" (taskbar corner, Win+D, three-finger touchpad
+// swipe) is a *consequence* of that reparenting being done correctly, not
+// a separate mechanism layered on top of it. A previous version of this
+// file additionally subclassed the widget to swallow WM_SYSCOMMAND/
+// SC_MINIMIZE, on the assumption that's how Show Desktop minimizes
+// windows — it isn't. Show Desktop minimizes windows by calling
+// ShowWindow()/SetWindowPlacement() on their HWNDs directly from outside
+// the process, which never generates a WM_SYSCOMMAND at all, so that guard
+// was intercepting a message that was never being sent in this scenario.
+// It's been removed. What actually matters is that `attach` now (a) fixes
+// up the WS_CHILD/WS_POPUP style bits that `SetParent` alone doesn't touch
+// — MSDN calls this out explicitly — so the widget is a genuine child
+// window and not merely reparented-while-still-styled-as-a-popup, and (b)
+// runs before the window is ever shown, so Explorer's shell hooks never
+// get a chance to register it as an independent top-level window in the
+// first place. See desktop_layer.rs's module doc comment for the full
+// reasoning, plus a temporary message logger to confirm this from the
+// field.
 //
 // On macOS and Linux there's no equivalent public concept of "the WorkerW
 // behind the icons" to reparent into, so those platforms fall back to
