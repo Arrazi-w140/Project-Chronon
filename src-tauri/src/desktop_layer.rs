@@ -192,6 +192,85 @@
 // changed once (Windows 11 24H2, per Rainmeter's own source comments)
 // and could change again. Every step below fails soft and logs clearly
 // rather than panicking.
+//
+// =====================================================================
+// ADDENDUM: ROOT CAUSE of the guard installing "successfully" but never
+// actually firing (why Show-Desktop immunity doesn't reach the reporter's
+// machine even though everything above is correct in isolation)
+// =====================================================================
+// Two independently-documented facts, put together:
+//
+//   1. Per MSDN (quoted further down, above win_event_proc): "The client
+//      thread that calls SetWinEventHook must have a message loop in
+//      order to receive events." The exact same requirement applies to
+//      SetTimer's WM_TIMER: it is only ever delivered by GetMessage/
+//      PeekMessage + DispatchMessage running on the thread that owns the
+//      window the timer was armed on (learn.microsoft.com, SetTimer
+//      remarks). Both calls still "succeed" -- a non-null hook handle, a
+//      non-zero timer ID, a valid helper HWND -- even when no such loop
+//      exists on the calling thread; they just silently never deliver
+//      anything, forever, with nothing to catch or log about it from
+//      inside install_show_desktop_guard itself.
+//
+//   2. `install()` (below) is called from `push_widget` in
+//      widget_window.rs, which is an `async fn` Tauri command. Per
+//      Tauri's own documented command model, an async command's body
+//      runs on Tauri's async runtime (`tauri::async_runtime::spawn`, a
+//      Tokio worker-thread pool) -- NOT on the OS thread that owns tao's
+//      real Win32 message loop (that thread is permanently inside the
+//      blocking `tauri::Builder::run()` call from `main()` and never
+//      returns until the app exits). The one exception is
+//      `WebviewWindowBuilder::build()` itself, which internally hops
+//      onto that main thread and awaits the result -- this is exactly
+//      why widget_window.rs's own comment above `push_widget` says
+//      marking the command `async` lets Tauri "hop the window-creation
+//      call onto the main thread": that phrasing is accurate for
+//      `.build()` specifically, but the code that runs immediately
+//      after `.build()` returns -- including the previous, direct call
+//      to `install_show_desktop_guard()` -- resumes on the Tokio worker
+//      thread that polled the future, not on tao's thread.
+//
+// Put together: `install_show_desktop_guard`'s CreateWindowExW (helper
+// window), SetTimer (250ms guard), and SetWinEventHook
+// (EVENT_SYSTEM_FOREGROUND) were all being installed from a thread that
+// never pumps GetMessage/DispatchMessage. Every one of those calls
+// reports success -- there is no error path this bug trips -- while the
+// helper window's WM_TIMER and the WinEventHook's callback never fire.
+// This matches the reported symptom exactly: no WM_SIZE/WM_SHOWWINDOW/
+// WM_SYSCOMMAND/etc. on the widget's own HWND is *expected* (see the
+// ROOT CAUSE section above about Show Desktop not messaging the affected
+// window at all), but the self-healing mechanism that is supposed to
+// compensate for that -- the guard timer and the foreground hook -- was
+// also silently dead, so nothing ever re-pinned the widget after Show
+// Desktop engaged. (The widget's own subclassed WndProc, installed by
+// install_message_logger, is *not* affected the same way: that window
+// was created by `.build()`'s own main-thread hop, so it is already
+// pumped correctly by the main thread regardless of which thread calls
+// SetWindowLongPtrW on it -- subclassing only swaps a function pointer,
+// it doesn't change which thread dispatches to it. That is why the
+// widget's own message log can look completely normal while the guard
+// is nonetheless not running: they are diagnosing two different pieces
+// of the system.)
+//
+// THE FIX: dispatch `install_show_desktop_guard` through
+// `WebviewWindow::run_on_main_thread` -- the same officially-documented
+// mechanism `WebviewWindowBuilder::build()` already relies on internally
+// for the identical class of problem -- so the guard's
+// CreateWindowExW/SetTimer/SetWinEventHook calls land on the one thread
+// guaranteed to pump messages for the app's entire lifetime. See
+// `install()` below. This does not change *what* the guard does, only
+// *which thread* sets it up; `install_show_desktop_guard`,
+// `helper_wndproc`, `win_event_proc`, and everything else in this file
+// is unchanged.
+//
+// How to confirm this was the actual cause on a given machine, without
+// guessing: the guard's own heartbeat log line ("guard heartbeat: N
+// ticks delivered so far", emitted every 20th WM_TIMER tick) is the
+// tell. Before this fix, that line would never appear in the log no
+// matter how long the app runs, because the WM_TIMER that would
+// increment it never gets pumped. After this fix, it should appear
+// roughly every 5 seconds for as long as a widget is on the desktop.
+// =====================================================================
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::OnceLock;
@@ -985,10 +1064,17 @@ pub fn uninstall() {
 
 /// Entry point called once, from widget_window.rs, right after the
 /// widget window is built (while it is still hidden). Applies the static
-/// shell exclusions, does an initial z-order pin, and installs the
-/// active defense. Returns whether every step succeeded; the caller
-/// logs a warning if not, since the widget still works as a normal
-/// window in that case, just without Rainmeter-equivalent guarantees.
+/// shell exclusions and does an initial z-order pin synchronously (both
+/// are plain, thread-agnostic Win32 calls against an existing HWND), then
+/// dispatches installation of the active defense (helper window, guard
+/// timer, WinEventHook) onto the main thread via `run_on_main_thread` --
+/// see the "ADDENDUM: ROOT CAUSE of the guard installing successfully
+/// but never actually firing" section in this file's module doc comment
+/// for why that dispatch, rather than a direct call, is required.
+/// Returns whether every synchronous step succeeded and the dispatch
+/// itself was accepted; the caller logs a warning if not, since the
+/// widget still works as a normal window in that case, just without
+/// Rainmeter-equivalent guarantees.
 ///
 /// NOTE: this alone is not sufficient -- `widget_window.rs` calls
 /// `.show()` immediately after this returns, and that call reliably
@@ -1010,11 +1096,54 @@ pub fn install(window: &WebviewWindow) -> bool {
     let exclusions_ok = set_tool_window_style(hwnd, "install");
     let peek_ok = apply_peek_exclusion(hwnd);
     let pin_ok = pin_to_desktop_layer(hwnd);
-    let guard_ok = install_show_desktop_guard(hwnd);
+
+    // See the "ADDENDUM: ROOT CAUSE of the guard installing successfully
+    // but never actually firing" section in this file's module doc
+    // comment. `install()` can run on a Tauri async-command worker
+    // thread rather than the OS thread that pumps tao's Win32 message
+    // loop; SetWinEventHook and SetTimer both depend on their *calling*
+    // thread doing that pumping to ever deliver anything, and neither
+    // one errors out when it can't. Dispatching the guard's installation
+    // through `run_on_main_thread` -- the same mechanism
+    // WebviewWindowBuilder::build() already relies on internally for the
+    // identical class of problem -- puts CreateWindowExW/SetTimer/
+    // SetWinEventHook on the one thread guaranteed to pump messages for
+    // the app's whole lifetime.
+    //
+    // `run_on_main_thread` dispatches and returns immediately rather than
+    // blocking for the closure to finish, so `dispatch_ok` below reflects
+    // whether the dispatch itself was accepted, not whether
+    // install_show_desktop_guard's own steps inside it succeeded --
+    // those are still fully logged (as before) from within the closure,
+    // on the main thread, a moment later.
+    //
+    // HWND cannot be captured directly in the `move` closure below: it
+    // wraps a raw pointer and is therefore !Send, and run_on_main_thread
+    // requires `F: Send`. It is passed across as the same pointer-sized
+    // isize bit pattern the store_handle/load_handle helpers elsewhere in
+    // this file already use for exactly this reason (see their doc
+    // comment), rather than assuming a specific internal representation
+    // for the handle type.
+    let hwnd_bits: isize = unsafe { std::mem::transmute_copy(&hwnd) };
+    let dispatch_ok = window
+        .run_on_main_thread(move || {
+            let widget_hwnd: HWND = unsafe { std::mem::transmute_copy(&hwnd_bits) };
+            if !install_show_desktop_guard(widget_hwnd) {
+                log("install_show_desktop_guard did not fully succeed -- see the \
+                     preceding [Chronon/DesktopLayer] log lines for which step failed");
+            }
+        })
+        .is_ok();
+    if !dispatch_ok {
+        log("run_on_main_thread failed to dispatch the show-desktop guard's \
+             installation -- the widget will still show, with the static \
+             exclusions and the initial z-order pin above, but without \
+             Show-Desktop z-order self-healing");
+    }
 
     install_message_logger(window);
 
-    exclusions_ok && peek_ok && pin_ok && guard_ok
+    exclusions_ok && peek_ok && pin_ok && dispatch_ok
 }
 
 /// Called from widget_window.rs immediately after `widget_window.show()`
