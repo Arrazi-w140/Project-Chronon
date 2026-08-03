@@ -504,6 +504,40 @@ unsafe extern "system" fn find_icon_layer_sibling(
 /// and by the polling timer) rather than cached, because this window can
 /// be destroyed and recreated by Explorer -- caching it would reproduce
 /// the staleness problem the previous WorkerW SetParent approach had.
+///
+/// =====================================================================
+/// ROOT CAUSE of the icon-host handle flapping between two different
+/// values on every ordinary 250ms tick (not just around Show Desktop) --
+/// found by reading back a live debug log after this file's recovery
+/// logging made the instability visible for the first time:
+/// =====================================================================
+/// The classic-layout branch below used to send the undocumented 0x052C
+/// ("spawn the icon WorkerW") message to Progman unconditionally, on
+/// every single call -- and this function is called every 250ms, forever,
+/// by the polling guard timer for as long as any widget is on the
+/// desktop. That message is not reliably a no-op when a WorkerW already
+/// exists: on many systems, Explorer creates an *additional* WorkerW
+/// each time it receives it rather than reusing the existing one. With
+/// more than one WorkerW now present, `find_icon_layer_sibling`'s
+/// EnumWindows search -- which just returns the first WorkerW it
+/// encounters after the SHELLDLL_DefView owner in z-order -- can
+/// nondeterministically match a different one of them on different
+/// calls, depending on exactly how Explorer happens to have ordered them
+/// at that instant. Pinning the widget against a shifting, sometimes-
+/// orphaned anchor four times a second is consistent with the widget
+/// ending up in the wrong place after Show Desktop even though every
+/// individual SetWindowPos call in the log reports success -- the calls
+/// were succeeding at pinning behind *a* WorkerW, just not reliably the
+/// *same*, correct one.
+///
+/// The fix: only send 0x052C as a last resort, when the sibling search
+/// comes up completely empty without it -- preserving the original
+/// intent (a widget pushed to the desktop before Explorer has ever
+/// created the icon WorkerW, e.g. immediately after Explorer starts,
+/// still has something to find) without re-triggering Explorer's
+/// duplicate-creation behavior on every steady-state poll. In the
+/// common case (icon host already exists and isn't changing), this
+/// function no longer sends that message at all.
 fn find_desktop_icon_host() -> Option<HWND> {
     unsafe {
         let progman = FindWindowW(w!("Progman"), PCWSTR::null()).ok()?;
@@ -517,9 +551,24 @@ fn find_desktop_icon_host() -> Option<HWND> {
             return Some(progman);
         }
 
-        // Classic layout: ask Progman to spawn the icon WorkerW if it
-        // doesn't exist yet, then search for the sibling-of-the-icon-
-        // owner pattern.
+        // Classic layout: search for the sibling-of-the-icon-owner
+        // pattern FIRST, without sending 0x052C -- this is the steady-
+        // state path taken on every one of the guard timer's 250ms
+        // ticks, so it must not have a side effect that can multiply
+        // WorkerW windows (see the ROOT CAUSE section above).
+        if let Some(found) = find_icon_layer_sibling_once() {
+            return Some(found);
+        }
+
+        // Nothing found: only now ask Progman to spawn the icon WorkerW,
+        // as a one-shot fallback for the case this function's original
+        // comment already called out (no WorkerW has ever been created
+        // yet, e.g. right after Explorer starts, or right after Explorer
+        // restarts). This branch should be rare in steady state, so it's
+        // worth logging when it happens.
+        log("find_desktop_icon_host: classic-layout sibling search came up empty -- \
+             asking Progman to spawn the icon WorkerW (0x052C) as a one-shot fallback, \
+             then retrying once");
         let _ = windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
             progman,
             SPAWN_WORKERW,
@@ -530,16 +579,26 @@ fn find_desktop_icon_host() -> Option<HWND> {
             None,
         );
 
-        let mut target = HWND::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(
-            Some(find_icon_layer_sibling),
-            LPARAM(&mut target as *mut HWND as isize),
-        );
-        if !target.0.is_null() {
-            Some(target)
-        } else {
-            None
-        }
+        find_icon_layer_sibling_once()
+    }
+}
+
+/// One pass of the classic-layout "find the WorkerW sibling of whichever
+/// window owns SHELLDLL_DefView" search, with no side effects (no 0x052C
+/// send) -- split out of `find_desktop_icon_host` so that function can
+/// call it once silently (the steady-state, four-times-a-second path)
+/// and, only if that comes up empty, once more after the 0x052C
+/// fallback, without duplicating the EnumWindows call itself.
+unsafe fn find_icon_layer_sibling_once() -> Option<HWND> {
+    let mut target = HWND::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(
+        Some(find_icon_layer_sibling),
+        LPARAM(&mut target as *mut HWND as isize),
+    );
+    if !target.0.is_null() {
+        Some(target)
+    } else {
+        None
     }
 }
 
@@ -720,7 +779,19 @@ fn apply_peek_exclusion(hwnd: HWND) -> bool {
 /// Skin::ChangeZPos's `SetWindowPos(m_Window, insertAfter, ...)` calls
 /// in Rainmeter's Library/Skin.cpp.
 fn pin_to_desktop_layer(hwnd: HWND) -> bool {
-    let icon_host = find_desktop_icon_host();
+    pin_to_desktop_layer_with_host(hwnd, find_desktop_icon_host())
+}
+
+/// Same pin as `pin_to_desktop_layer`, but takes an already-resolved
+/// icon-host lookup instead of performing its own. Split out purely so
+/// `recover_desktop_attachment` -- which needs the `Option<HWND>` result
+/// itself, as the signal for whether the desktop hierarchy has finished
+/// settling, in addition to the pin outcome -- doesn't have to call
+/// `find_desktop_icon_host()` twice per attempt. `pin_to_desktop_layer`
+/// above remains the entry point for every other call site (the guard
+/// timer, the non-shell branch of the foreground hook, WM_DISPLAYCHANGE)
+/// and keeps its original one-argument signature unchanged.
+fn pin_to_desktop_layer_with_host(hwnd: HWND, icon_host: Option<HWND>) -> bool {
     let result = unsafe {
         match icon_host {
             Some(host) => SetWindowPos(
@@ -821,17 +892,44 @@ fn enforce_desktop_layer(hwnd: HWND, context: &str) {
 //      Explorer's own in-flight operation and lose, which reads
 //      identically to "nothing happened" from the outside.
 //
-// is_shell_window/settle_and_repin below are this file's version of
-// both: is_shell_window replaces the old (never-present in this file, so
-// nothing to remove) WorkerW-class-name check with the same
-// version-independent "is the desktop itself becoming foreground" test
-// Rainmeter now uses, and settle_and_repin replaces a single
-// enforce_desktop_layer call with several spaced out over ~20ms, which
-// is this file's equivalent of Rainmeter's retry-until-stable CheckDesktopState
-// loop (Chronon has no per-skin state machine to re-check the way
-// Rainmeter's CheckDesktopState does, so it substitutes "try several
-// times over the window where the race can happen" for "poll until the
-// specific condition that indicates the race is over").
+// is_shell_window/recover_desktop_attachment below are this file's
+// version of both: is_shell_window replaces the old (never-present in
+// this file, so nothing to remove) WorkerW-class-name check with the
+// same version-independent "is the desktop itself becoming foreground"
+// test Rainmeter now uses, and recover_desktop_attachment is this file's
+// equivalent of Rainmeter's retry-until-stable CheckDesktopState loop --
+// with an actual stability CHECK, not just a fixed number of blind
+// attempts. An earlier version of this function (then named
+// settle_and_repin) simply called enforce_desktop_layer six times, 4ms
+// apart, unconditionally -- it substituted "try several times over the
+// window where the race can happen" for "poll until the specific
+// condition that indicates the race is over" because, unlike Rainmeter,
+// Chronon had no per-skin state machine to re-check against. This
+// version closes that gap directly: every attempt re-resolves
+// find_desktop_icon_host() (see that function's own doc comment on why
+// it's never cached) and treats "found it" as the actual, checkable
+// stability signal -- Explorer has finished recreating the desktop-icons
+// host, which is precisely the undocumented recreation this whole file
+// exists to tolerate. When that signal is present, recovery stops
+// immediately instead of continuing to sleep-and-retry for no reason;
+// when it's absent, the gap between attempts backs off exponentially
+// (4ms, 8ms, 16ms, ... capped) rather than staying fixed, so a desktop
+// that settles quickly recovers in a handful of milliseconds while one
+// that's still mid-transition gets progressively more room without the
+// burst ever needing an unbounded attempt count. If the desktop still
+// hasn't settled once the bounded burst (RECOVERY_MAX_ATTEMPTS, worst
+// case well under 200ms total) runs out, this function hands off
+// cleanly rather than blocking further: the 250ms polling guard timer
+// (already installed and running for as long as any widget is on the
+// desktop, see helper_wndproc's WM_TIMER case) keeps calling
+// enforce_desktop_layer every tick regardless, so the widget still
+// finishes recovering automatically the moment Explorer catches up, just
+// on the timer's cadence instead of within this callback. That split --
+// a fast, verified, backed-off burst on the foreground-hook thread, plus
+// an already-eternal background retry as the fallback -- is what
+// "intelligently retry until the widget is fully restored" means here,
+// without ever blocking the thread that pumps tao's message loop for
+// more than a fraction of a second.
 //
 // IMPORTANT CAVEAT, stated plainly rather than glossed over: per
 // brianferguson's own comments on #377, this does not, and cannot,
@@ -856,27 +954,127 @@ fn is_shell_window(hwnd: HWND) -> bool {
     }
 }
 
-/// Re-pins the widget several times over a short window instead of once.
-/// Used specifically for the moment Show Desktop engages (see
-/// win_event_proc below), where a single immediate re-pin can race
-/// Explorer's own in-flight hide operation and silently lose -- see the
-/// ROOT CAUSE section above. Deliberately more aggressive (6 attempts,
-/// 4ms apart, ~20ms total) than Rainmeter's 5x2ms, since this file is
-/// polling a structural z-order lookup (find_desktop_icon_host) on every
-/// attempt rather than a cheap cached-state check.
-fn settle_and_repin(hwnd: HWND, context: &str) {
-    const ATTEMPTS: u32 = 6;
-    const SPACING_MS: u32 = 4;
-    for attempt in 1..=ATTEMPTS {
-        enforce_desktop_layer(hwnd, context);
-        if attempt < ATTEMPTS {
-            unsafe { Sleep(SPACING_MS) };
+/// Bounded burst size and backoff schedule for `recover_desktop_attachment`.
+/// See that function's doc comment and the design-rationale addendum
+/// above `is_shell_window` for why this replaced a fixed 6x4ms loop:
+/// these numbers bound the worst case (every attempt used, maximum
+/// backoff each time) at well under 200ms, which is what keeps this
+/// safe to run synchronously on the thread that pumps tao's message
+/// loop.
+const RECOVERY_MAX_ATTEMPTS: u32 = 8;
+const RECOVERY_INITIAL_BACKOFF_MS: u32 = 4;
+const RECOVERY_MAX_BACKOFF_MS: u32 = 40;
+
+/// Chronon's own internal desktop-attachment logic, re-invoked in place
+/// on the widget's existing HWND whenever a desktop-show event is
+/// detected (see win_event_proc's is_shell_window branch, the sole
+/// caller). This is deliberately the exact same three Windows-only steps
+/// `install()` applies the first time the widget is pushed to the
+/// desktop -- WS_EX_TOOLWINDOW / clear WS_EX_APPWINDOW
+/// (set_tool_window_style), DWMWA_EXCLUDED_FROM_PEEK
+/// (apply_peek_exclusion), and the z-order pin behind the desktop-icons
+/// host (pin_to_desktop_layer_with_host) -- just re-run against the
+/// window that has been there the whole time, never a new one:
+///   - No new widget instance and no duplicate window: this function
+///     only ever takes the `hwnd` it's given; it has no window-creation
+///     call anywhere in it.
+///   - No lost runtime state: every step here is a native Win32
+///     attribute (extended style, a DWM flag, z-order) applied directly
+///     to the existing HWND. None of it touches the webview's DOM/JS
+///     state, so position, size, fonts, colors, spacing, transparency,
+///     language, alignment, and every other user setting -- all of which
+///     live in widget-renderer.js's own state and localStorage-equivalent
+///     config, never in this file -- are completely untouched.
+///   - No flicker, disappearing/reappearing, or visible repositioning:
+///     none of the three steps call show()/hide() or move/resize the
+///     window (pin_to_desktop_layer_with_host always passes SWP_NOMOVE |
+///     SWP_NOSIZE | SWP_NOACTIVATE), so there is nothing for the user to
+///     see happen even while this runs.
+///   - Safe to call repeatedly with no side effects or leaks: nothing
+///     here allocates a handle, registers a class, or creates a window;
+///     it only ever sets existing state that is a no-op to set again
+///     when already correct (see set_tool_window_style's and
+///     apply_peek_exclusion's own doc comments).
+///
+/// What's new relative to the fixed-attempt version this replaced
+/// (previously named settle_and_repin -- see the design-rationale
+/// addendum above is_shell_window for the full before/after): each
+/// attempt now re-resolves find_desktop_icon_host() itself and treats
+/// finding it as a genuine, checkable "the desktop has stabilized"
+/// signal, rather than assuming a fixed number of tries is enough.
+///   - If the desktop is already attached correctly (the common case:
+///     Explorer's icon-host window still resolves and the style/pin
+///     calls have nothing to correct), the very first attempt succeeds
+///     and this returns immediately having only verified and
+///     reinforced -- it changes nothing that wasn't already right.
+///   - If Explorer is still mid-transition (icon-host lookup comes back
+///     empty -- exactly the "Windows is still transitioning" case),
+///     this logs that plainly and retries with exponential backoff (4ms,
+///     8ms, 16ms, ... capped at RECOVERY_MAX_BACKOFF_MS) instead of
+///     hammering FindWindow calls at a fixed cadence, so it naturally
+///     gives a slow-to-settle desktop more room on each successive try.
+///   - If the desktop still hasn't stabilized once all
+///     RECOVERY_MAX_ATTEMPTS are exhausted, this function stops and logs
+///     that plainly rather than blocking longer: the 250ms polling guard
+///     timer (already installed and running for as long as any widget
+///     is on the desktop -- see helper_wndproc's WM_TIMER case) keeps
+///     calling enforce_desktop_layer every tick regardless of what this
+///     burst achieved, so recovery still completes automatically the
+///     moment Explorer catches up. That combination -- a fast, verified,
+///     backed-off burst here, plus an already-eternal background retry
+///     as the fallback -- is what makes recovery "intelligently retry
+///     until the widget is fully restored" end to end, without ever
+///     blocking the message-pump thread indefinitely.
+fn recover_desktop_attachment(hwnd: HWND, context: &str) {
+    let mut backoff_ms = RECOVERY_INITIAL_BACKOFF_MS;
+    let mut elapsed_ms: u32 = 0;
+
+    for attempt in 1..=RECOVERY_MAX_ATTEMPTS {
+        log(&format!(
+            "[{context}] recovery attempt {attempt}/{RECOVERY_MAX_ATTEMPTS}: invoking internal \
+             desktop attachment logic (tool-window style + peek exclusion + z-order pin)"
+        ));
+
+        let style_ok = set_tool_window_style(hwnd, context);
+        let peek_ok = apply_peek_exclusion(hwnd);
+        let icon_host = find_desktop_icon_host();
+        let pin_ok = pin_to_desktop_layer_with_host(hwnd, icon_host);
+
+        if !peek_ok {
+            log(&format!(
+                "[{context}] recovery attempt {attempt}: peek-exclusion reassertion failed \
+                 (non-fatal -- only affects the Aero Peek hover preview, not the attachment \
+                 itself)"
+            ));
         }
+
+        if icon_host.is_some() && style_ok && pin_ok {
+            log(&format!(
+                "[{context}] recovery attempt {attempt}: succeeded -- widget verified attached \
+                 directly behind the desktop-icons host; no further attempts needed"
+            ));
+            return;
+        }
+
+        if attempt == RECOVERY_MAX_ATTEMPTS {
+            log(&format!(
+                "[{context}] recovery attempt {attempt}: desktop hierarchy still not settled \
+                 after {RECOVERY_MAX_ATTEMPTS} attempts (~{elapsed_ms}ms) -- handing off to the \
+                 250ms polling guard timer, which will keep retrying in the background until \
+                 Explorer finishes recreating the desktop-icons host"
+            ));
+            return;
+        }
+
+        log(&format!(
+            "[{context}] recovery attempt {attempt}: desktop still transitioning (icon-host \
+             lookup came back empty, meaning Explorer hasn't finished recreating it yet) -- \
+             retrying in {backoff_ms}ms"
+        ));
+        unsafe { Sleep(backoff_ms) };
+        elapsed_ms += backoff_ms;
+        backoff_ms = (backoff_ms * 2).min(RECOVERY_MAX_BACKOFF_MS);
     }
-    log(&format!(
-        "{context}: settle_and_repin finished ({ATTEMPTS} attempts over ~{}ms)",
-        ATTEMPTS * SPACING_MS
-    ));
 }
 
 /// The helper window's WndProc. This window's only jobs are to own the
@@ -946,12 +1144,17 @@ unsafe extern "system" fn win_event_proc(
     if is_shell_window(hwnd) {
         // The desktop itself just became the foreground window -- this is
         // the actual Show-Desktop-engage signal (see the ROOT CAUSE
-        // section above is_shell_window). A single immediate re-pin here
-        // can race Explorer's own in-flight hide operation and lose, so
-        // settle_and_repin spreads several attempts over ~20ms instead.
+        // section above is_shell_window), i.e. "the desktop has been
+        // shown". Chronon's own internal desktop-attachment logic is
+        // triggered immediately, right here, rather than being deferred
+        // to the next guard-timer tick: a single immediate re-pin can
+        // race Explorer's own in-flight hide operation and lose, so
+        // recover_desktop_attachment verifies success and backs off
+        // across several attempts instead of assuming one is enough --
+        // see that function's doc comment for the full reasoning.
         log("EVENT_SYSTEM_FOREGROUND observed, foreground=shell window -- \
-             this is the Show-Desktop-engage signal, settle-and-repinning");
-        settle_and_repin(widget, "show-desktop-engage");
+             this is the Show-Desktop-engage signal, recovering desktop attachment");
+        recover_desktop_attachment(widget, "show-desktop-engage");
     } else {
         log("EVENT_SYSTEM_FOREGROUND observed -> re-pinning widget");
         enforce_desktop_layer(widget, "foreground-hook");
